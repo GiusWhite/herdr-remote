@@ -436,6 +436,13 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
       });
+      // agent.send writes literal text without submitting; follow with Enter
+      await new Promise((r) => setTimeout(r, 300));
+      await api('/api/panes/' + encodeURIComponent(current.pane_id) + '/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys: ['enter'] }),
+      });
       input.value = '';
       setTimeout(loadOutput, 400);
     } catch (e) {

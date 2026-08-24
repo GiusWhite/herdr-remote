@@ -67,12 +67,13 @@ once and stores it in localStorage; all `/api` routes require it
   follow herdr's keybinding convention (`enter`, `esc`, `ctrl+c`, `tab`,
   `up`, …).
 
-## Untested behavior
+## Verified send behavior
 
-- **`agent.send`**: whether the sent text is also submitted (i.e. behaves like
-  typing + Enter) is untested — nothing was sent to live agents during
-  development. If it only types, follow up with the Enter button (which uses
-  `pane.send_keys`).
-- **`pane.send_keys` key names**: the `enter` / `esc` / `ctrl+c` names match
-  herdr's documented keybinding syntax but were not exercised against a live
-  pane for the same reason.
+Exercised against a throwaway Claude session:
+
+- **`agent.send` writes literal text without submitting** (confirmed, and
+  stated by `herdr agent --help`). The UI's send bar therefore follows each
+  send with `pane.send_keys ["enter"]` after a short delay.
+- **`pane.send_keys` names `enter`, `esc`/`escape`, `ctrl+c` are accepted and
+  delivered** (invalid names return an `invalid_key` error). Note Claude Code
+  itself keeps composer text on Esc; Ctrl+C clears/interrupts.
