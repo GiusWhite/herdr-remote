@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>herdr</title>
+<style>
+  :root {
+    --bg: #f4f3f0;
+    --surface: #ffffff;
+    --surface-2: #eceae5;
+    --text: #1c1b18;
+    --text-2: #6b6860;
+    --line: #dedbd3;
+    --accent: #b45309;
+    --working: #d97706;
+    --idle: #8a8578;
+    --done: #15803d;
+    --blocked: #dc2626;
+    --unknown: #a8a29e;
+    --term-bg: #16161a;
+    --term-fg: #d6d6dc;
+    --shadow: 0 1px 3px rgba(28, 27, 24, .08), 0 4px 14px rgba(28, 27, 24, .06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #131312;
+      --surface: #1d1d1b;
+      --surface-2: #262624;
+      --text: #e8e6e1;
+      --text-2: #97948b;
+      --line: #33322f;
+      --accent: #e8963e;
+      --working: #f59e0b;
+      --idle: #6f6c63;
+      --done: #4ade80;
+      --blocked: #f87171;
+      --unknown: #78716c;
+      --term-bg: #101013;
+      --term-fg: #cfcfd6;
+      --shadow: 0 1px 3px rgba(0, 0, 0, .4), 0 4px 14px rgba(0, 0, 0, .3);
+    }
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { height: 100%; }
+  body {
+    height: 100%;
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior-y: none;
+  }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---- Home ---- */
+  #home {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: calc(env(safe-area-inset-top) + 16px) max(16px, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 32px) max(16px, env(safe-area-inset-left));
+  }
+  header.app {
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 8px 2px 20px;
+  }
+  header.app h1 { font-size: 26px; font-weight: 700; letter-spacing: -.02em; }
+  #conn {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+    font-size: 13px; color: var(--text-2);
+  }
+  #conn .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--idle); }
+  #conn.live .dot { background: var(--done); }
+  #conn.poll .dot { background: var(--working); }
+
+  section.ws { margin-bottom: 26px; }
+  section.ws h2 {
+    font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--text-2); padding: 0 2px 10px;
+    display: flex; align-items: baseline; gap: 8px;
+  }
+  section.ws h2 .count { font-weight: 400; letter-spacing: 0; text-transform: none; }
+  .empty-ws { font-size: 14px; color: var(--text-2); padding: 2px 2px 0; }
+
+  .agent {
+    display: flex; align-items: center; gap: 14px;
+    width: 100%; text-align: left;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 14px 16px;
+    min-height: 64px;
+    margin-bottom: 10px;
+    box-shadow: var(--shadow);
+    transition: transform .12s ease-out;
+  }
+  .agent:active { transform: scale(.985); }
+  .status {
+    flex: none; width: 11px; height: 11px; border-radius: 50%;
+    background: var(--unknown);
+  }
+  .status.working { background: var(--working); animation: pulse 1.4s ease-out infinite; }
+  .status.idle { background: var(--idle); }
+  .status.done { background: var(--done); }
+  .status.blocked { background: var(--blocked); animation: pulse 1.4s ease-out infinite; }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 0%, transparent); }
+    0.1% { box-shadow: 0 0 0 0 var(--working-ring, rgba(217,119,6,.45)); }
+    100% { box-shadow: 0 0 0 9px rgba(217,119,6,0); }
+  }
+  .status.blocked { --working-ring: rgba(220,38,38,.45); }
+  .agent .meta { min-width: 0; flex: 1; }
+  .agent .title {
+    display: block;
+    font-weight: 550; font-size: 15px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .agent .sub {
+    display: block;
+    font-size: 13px; color: var(--text-2);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .agent .sub .state { text-transform: capitalize; }
+  .agent svg.chev { flex: none; width: 16px; height: 16px; stroke: var(--text-2); }
+
+  #home .note { font-size: 13px; color: var(--text-2); text-align: center; padding-top: 8px; }
+
+  /* ---- Detail ---- */
+  #detail {
+    position: fixed; inset: 0; z-index: 10;
+    display: none; flex-direction: column;
+    background: var(--term-bg);
+  }
+  #detail.open { display: flex; }
+  #detail .bar {
+    flex: none;
+    display: flex; align-items: center; gap: 4px;
+    padding: calc(env(safe-area-inset-top) + 6px) max(8px, env(safe-area-inset-right)) 6px max(4px, env(safe-area-inset-left));
+    background: color-mix(in srgb, var(--term-bg) 88%, white);
+    border-bottom: 1px solid rgba(255,255,255,.08);
+    color: var(--term-fg);
+  }
+  #detail .bar .titlebox { min-width: 0; flex: 1; }
+  #detail .bar .t {
+    font-size: 15px; font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #detail .bar .s {
+    font-size: 12px; color: rgba(214,214,220,.55);
+    display: flex; align-items: center; gap: 6px;
+    white-space: nowrap; overflow: hidden;
+  }
+  #detail .bar .s .status { width: 8px; height: 8px; }
+  .iconbtn {
+    flex: none; width: 44px; height: 44px; border-radius: 10px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--term-fg);
+  }
+  .iconbtn:active { background: rgba(255,255,255,.1); }
+  .iconbtn svg { width: 20px; height: 20px; stroke: currentColor; }
+  .iconbtn.spin svg { animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #out {
+    flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch;
+    padding: 12px max(12px, env(safe-area-inset-right)) 12px max(12px, env(safe-area-inset-left));
+  }
+  #out pre {
+    font: 12px/1.45 ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    color: var(--term-fg);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  #out .placeholder { color: rgba(214,214,220,.45); font-size: 14px; padding: 24px 8px; text-align: center; }
+
+  #composer {
+    flex: none;
+    padding: 8px max(10px, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 8px) max(10px, env(safe-area-inset-left));
+    background: color-mix(in srgb, var(--term-bg) 88%, white);
+    border-top: 1px solid rgba(255,255,255,.08);
+  }
+  #composer .keys { display: flex; gap: 8px; padding-bottom: 8px; }
+  #composer .keys button {
+    height: 34px; padding: 0 14px; border-radius: 8px;
+    font: 12px/1 ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--term-fg);
+    background: rgba(255,255,255,.08);
+    border: 1px solid rgba(255,255,255,.12);
+  }
+  #composer .keys button:active { background: rgba(255,255,255,.18); }
+  #composer form { display: flex; gap: 8px; }
+  #composer input {
+    flex: 1; min-width: 0; height: 44px;
+    padding: 0 14px; border-radius: 11px;
+    font: 14px ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--term-fg);
+    background: rgba(255,255,255,.07);
+    border: 1px solid rgba(255,255,255,.14);
+  }
+  #composer input::placeholder { color: rgba(214,214,220,.4); }
+  #composer .send {
+    flex: none; width: 44px; height: 44px; border-radius: 11px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--accent); color: #fff;
+  }
+  #composer .send:disabled { opacity: .45; }
+  #composer .send svg { width: 18px; height: 18px; stroke: currentColor; }
+
+  #toast {
+    position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 90px);
+    transform: translateX(-50%) translateY(8px);
+    background: var(--text); color: var(--bg);
+    font-size: 13px; padding: 9px 16px; border-radius: 10px;
+    opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s;
+    z-index: 20; max-width: 88vw;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<main id="home">
+  <header class="app">
+    <h1>herdr</h1>
+    <span id="conn"><span class="dot"></span><span id="connLabel">connecting</span></span>
+  </header>
+  <div id="workspaces"><p class="note">Loading…</p></div>
+</main>
+
+<div id="detail" role="dialog" aria-modal="true">
+  <div class="bar">
+    <button class="iconbtn" id="backBtn" aria-label="Back">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
+    <div class="titlebox">
+      <div class="t" id="dTitle"></div>
+      <div class="s"><span class="status" id="dStatus"></span><span id="dSub"></span></div>
+    </div>
+    <button class="iconbtn" id="refreshBtn" aria-label="Refresh output">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg>
+    </button>
+  </div>
+  <div id="out"><pre id="outText"></pre></div>
+  <div id="composer">
+    <div class="keys">
+      <button type="button" data-key="enter">Enter</button>
+      <button type="button" data-key="esc">Esc</button>
+      <button type="button" data-key="ctrl+c">Ctrl+C</button>
+    </div>
+    <form id="sendForm">
+      <input id="sendInput" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Send text to agent…" aria-label="Text to send">
+      <button class="send" type="submit" aria-label="Send">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+      </button>
+    </form>
+  </div>
+</div>
+
+<div id="toast" role="status"></div>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  let token = localStorage.getItem('herdr_token') || '';
+  let overview = { workspaces: [] };
+  let current = null;          // agent object currently open in detail
+  let pollTimer = null;
+  let es = null;
+  let refetchTimer = null;
+
+  // ---- API ----
+  async function api(path, opts = {}) {
+    const headers = Object.assign({}, opts.headers);
+    if (token) headers.Authorization = 'Bearer ' + token;
+    const res = await fetch(path, Object.assign({}, opts, { headers }));
+    if (res.status === 401) {
+      const t = prompt('Access token for herdr-web:');
+      if (t) { token = t.trim(); localStorage.setItem('herdr_token', token); return api(path, opts); }
+      throw new Error('unauthorized');
+    }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || res.statusText);
+    return body;
+  }
+
+  function toast(msg) {
+    const el = $('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(el._t);
+    el._t = setTimeout(() => el.classList.remove('show'), 2600);
+  }
+
+  const basename = (p) => (p || '').replace(/\/+$/, '').split('/').pop() || p || '';
+  // Event titles keep the agent's spinner glyph; drop leading symbols.
+  const cleanTitle = (t) => (t || '').replace(/^[^\p{L}\p{N}]+\s*/u, '');
+
+  // ---- Home rendering ----
+  function render() {
+    const root = $('workspaces');
+    root.replaceChildren();
+    if (!overview.workspaces.length) {
+      root.innerHTML = '<p class="note">No workspaces. Is the herdr server running?</p>';
+      return;
+    }
+    for (const ws of overview.workspaces) {
+      const sec = document.createElement('section');
+      sec.className = 'ws';
+      const h = document.createElement('h2');
+      h.textContent = ws.label || ('Workspace ' + ws.number);
+      const c = document.createElement('span');
+      c.className = 'count';
+      c.textContent = ws.agents.length === 1 ? '1 agent' : ws.agents.length + ' agents';
+      h.appendChild(c);
+      sec.appendChild(h);
+      if (!ws.agents.length) {
+        const p = document.createElement('p');
+        p.className = 'empty-ws';
+        p.textContent = 'No agents in this workspace.';
+        sec.appendChild(p);
+      }
+      for (const a of ws.agents) sec.appendChild(agentCard(a));
+      root.appendChild(sec);
+    }
+  }
+
+  function agentCard(a) {
+    const btn = document.createElement('button');
+    btn.className = 'agent';
+    btn.dataset.pane = a.pane_id;
+    const dot = document.createElement('span');
+    dot.className = 'status ' + (a.agent_status || 'unknown');
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    const title = document.createElement('span');
+    title.className = 'title';
+    title.textContent = cleanTitle(a.terminal_title_stripped || a.terminal_title) || a.agent;
+    const sub = document.createElement('span');
+    sub.className = 'sub';
+    const state = document.createElement('span');
+    state.className = 'state';
+    state.textContent = a.agent_status || 'unknown';
+    sub.append(state, ' · ' + a.agent + ' · ' + basename(a.cwd));
+    meta.append(title, sub);
+    btn.append(dot, meta);
+    btn.insertAdjacentHTML('beforeend',
+      '<svg class="chev" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>');
+    btn.addEventListener('click', () => openDetail(a));
+    return btn;
+  }
+
+  async function loadOverview() {
+    try {
+      overview = await api('/api/overview');
+      render();
+      if (current) {
+        const fresh = findAgent(current.terminal_id);
+        if (fresh) { current = fresh; updateDetailHeader(); }
+      }
+    } catch (e) {
+      $('workspaces').innerHTML = '<p class="note">Cannot reach herdr: ' + e.message + '</p>';
+    }
+  }
+
+  function findAgent(terminalId) {
+    for (const ws of overview.workspaces)
+      for (const a of ws.agents)
+        if (a.terminal_id === terminalId) return a;
+    return null;
+  }
+
+  // ---- Detail view ----
+  function openDetail(a) {
+    current = a;
+    updateDetailHeader();
+    $('outText').textContent = '';
+    $('detail').classList.add('open');
+    history.pushState({ agent: a.terminal_id }, '');
+    loadOutput();
+  }
+
+  function closeDetail(fromPop) {
+    if (!$('detail').classList.contains('open')) return;
+    $('detail').classList.remove('open');
+    current = null;
+    if (!fromPop && history.state && history.state.agent) history.back();
+  }
+  window.addEventListener('popstate', () => closeDetail(true));
+  $('backBtn').addEventListener('click', () => closeDetail(false));
+
+  function updateDetailHeader() {
+    if (!current) return;
+    $('dTitle').textContent = cleanTitle(current.terminal_title_stripped) || current.agent;
+    $('dStatus').className = 'status ' + (current.agent_status || 'unknown');
+    $('dSub').textContent = (current.agent_status || 'unknown') + ' · ' + (current.cwd || '');
+  }
+
+  async function loadOutput() {
+    if (!current) return;
+    const btn = $('refreshBtn');
+    btn.classList.add('spin');
+    try {
+      const r = await api('/api/agents/' + encodeURIComponent(current.terminal_id) + '/output?lines=300&source=recent');
+      const text = (r.text ?? r.output ?? r.content ?? '').replace(/\s+$/, '');
+      const out = $('out');
+      const stick = out.scrollTop + out.clientHeight >= out.scrollHeight - 60;
+      $('outText').textContent = text || '';
+      $('out').querySelector('.placeholder')?.remove();
+      if (!text) {
+        const p = document.createElement('div');
+        p.className = 'placeholder';
+        p.textContent = 'No output yet.';
+        out.appendChild(p);
+      }
+      if (stick) out.scrollTop = out.scrollHeight;
+    } catch (e) {
+      toast('Read failed: ' + e.message);
+    } finally {
+      btn.classList.remove('spin');
+    }
+  }
+  $('refreshBtn').addEventListener('click', loadOutput);
+
+  $('sendForm').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    if (!current) return;
+    const input = $('sendInput');
+    const text = input.value;
+    if (!text) return;
+    const btn = ev.target.querySelector('.send');
+    btn.disabled = true;
+    try {
+      await api('/api/agents/' + encodeURIComponent(current.terminal_id) + '/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      input.value = '';
+      setTimeout(loadOutput, 400);
+    } catch (e) {
+      toast('Send failed: ' + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.querySelectorAll('#composer .keys button').forEach((b) => {
+    b.addEventListener('click', async () => {
+      if (!current) return;
+      try {
+        await api('/api/panes/' + encodeURIComponent(current.pane_id) + '/keys', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keys: [b.dataset.key] }),
+        });
+        setTimeout(loadOutput, 400);
+      } catch (e) {
+        toast('Key failed: ' + e.message);
+      }
+    });
+  });
+
+  // ---- Live updates: SSE with polling fallback ----
+  function setConn(mode) {
+    const el = $('conn');
+    el.className = mode;
+    $('connLabel').textContent = mode === 'live' ? 'live' : mode === 'poll' ? 'polling' : 'connecting';
+  }
+
+  function queueRefetch() {
+    clearTimeout(refetchTimer);
+    refetchTimer = setTimeout(loadOverview, 300);
+  }
+
+  // Update one agent card in place (status dot, title, state label).
+  function patchAgent(paneId, { agent_status, title }) {
+    let hit = null;
+    for (const ws of overview.workspaces)
+      for (const a of ws.agents)
+        if (a.pane_id === paneId) {
+          if (agent_status) a.agent_status = agent_status;
+          if (title) { a.terminal_title = title; a.terminal_title_stripped = title; }
+          hit = a;
+        }
+    if (!hit) { queueRefetch(); return; }
+    const card = document.querySelector('.agent[data-pane="' + CSS.escape(paneId) + '"]');
+    if (card) {
+      card.querySelector('.status').className = 'status ' + hit.agent_status;
+      card.querySelector('.title').textContent = cleanTitle(hit.terminal_title_stripped) || hit.agent;
+      card.querySelector('.state').textContent = hit.agent_status;
+    }
+    if (current && current.pane_id === paneId) {
+      const statusChanged = current.agent_status !== hit.agent_status;
+      current = hit;
+      updateDetailHeader();
+      if (statusChanged) loadOutput(); else throttledOutput();
+    }
+  }
+
+  // pane_updated fires on every output tick; refresh the open terminal at most every 3s.
+  let lastAutoLoad = 0;
+  function throttledOutput() {
+    const now = Date.now();
+    if (now - lastAutoLoad < 3000) return;
+    lastAutoLoad = now;
+    loadOutput();
+  }
+
+  function startSSE() {
+    // Wire event names use underscores (pane_updated), not the dotted subscription types.
+    const url = '/api/events' + (token ? '?token=' + encodeURIComponent(token) : '');
+    es = new EventSource(url);
+    es.addEventListener('pane_agent_status_changed', (ev) => {
+      const d = JSON.parse(ev.data);
+      patchAgent(d.pane_id, { agent_status: d.agent_status, title: d.title });
+    });
+    es.addEventListener('pane_updated', (ev) => {
+      const p = JSON.parse(ev.data).pane;
+      if (p) patchAgent(p.pane_id, { agent_status: p.agent_status, title: p.terminal_title_stripped });
+    });
+    ['workspace_updated', 'workspace_created', 'workspace_closed', 'workspace_renamed',
+     'tab_renamed', 'tab_created', 'tab_closed',
+     'pane_created', 'pane_closed', 'pane_exited', 'pane_agent_detected',
+    ].forEach((name) => es.addEventListener(name, queueRefetch));
+    es.onopen = () => { setConn('live'); stopPolling(); queueRefetch(); };
+    es.onerror = () => { setConn('poll'); startPolling(); };
+  }
+
+  function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(loadOverview, 10000);
+  }
+  function stopPolling() {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) loadOverview();
+  });
+
+  loadOverview();
+  startSSE();
+})();
+</script>
+</body>
+</html>

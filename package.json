@@ -1,0 +1,11 @@
+{
+  "name": "herdr-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local web UI to monitor and interact with herdr agent sessions",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node server.mjs"
+  }
+}
