@@ -152,6 +152,10 @@
     white-space: nowrap; overflow: hidden;
   }
   #detail .bar .s .status { width: 8px; height: 8px; }
+  #detail .bar .s .live { display: none; align-items: center; gap: 4px; color: var(--done); }
+  #detail .bar .s .live::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--done); }
+  #detail.live .bar .s .live { display: inline-flex; }
+  #detail.notfound #composer, #detail.notfound #refreshBtn { visibility: hidden; }
   .iconbtn {
     flex: none; width: 44px; height: 44px; border-radius: 10px;
     display: inline-flex; align-items: center; justify-content: center;
@@ -172,6 +176,7 @@
     white-space: pre-wrap; word-break: break-word;
   }
   #out .placeholder { color: rgba(214,214,220,.45); font-size: 14px; padding: 24px 8px; text-align: center; }
+  #out .placeholder a { color: var(--accent); }
 
   #composer {
     flex: none;
@@ -234,7 +239,7 @@
     </button>
     <div class="titlebox">
       <div class="t" id="dTitle"></div>
-      <div class="s"><span class="status" id="dStatus"></span><span id="dSub"></span></div>
+      <div class="s"><span class="status" id="dStatus"></span><span id="dSub"></span><span class="live">live</span></div>
     </div>
     <button class="iconbtn" id="refreshBtn" aria-label="Refresh output">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg>
@@ -268,6 +273,12 @@
   let pollTimer = null;
   let es = null;
   let refetchTimer = null;
+  let cameFromHome = false;    // detail was opened by in-app navigation
+  let lastEventRev = -1;       // newest pane_updated revision seen for the open pane
+  let outDebounce = null;
+  let outFetching = false;
+  let outQueued = false;
+  let lastOutputAt = 0;
 
   // ---- API ----
   async function api(path, opts = {}) {
@@ -346,7 +357,10 @@
     btn.append(dot, meta);
     btn.insertAdjacentHTML('beforeend',
       '<svg class="chev" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>');
-    btn.addEventListener('click', () => openDetail(a));
+    btn.addEventListener('click', () => {
+      cameFromHome = true;
+      location.hash = '#/agent/' + encodeURIComponent(a.terminal_id);
+    });
     return btn;
   }
 
@@ -370,24 +384,59 @@
     return null;
   }
 
-  // ---- Detail view ----
-  function openDetail(a) {
+  // ---- Router: #/ = home, #/agent/<terminal_id> = detail ----
+  function route() {
+    const m = location.hash.match(/^#\/agent\/(.+)$/);
+    if (m) showAgent(decodeURIComponent(m[1]));
+    else hideDetail();
+  }
+  window.addEventListener('hashchange', route);
+
+  async function showAgent(terminalId) {
+    if (!overview.workspaces.length) await loadOverview(); // deep link: resolve id first
+    const a = findAgent(terminalId);
+    if (!a) return showNotFound(terminalId);
     current = a;
+    lastEventRev = -1;
     updateDetailHeader();
     $('outText').textContent = '';
+    $('out').querySelector('.placeholder')?.remove();
+    $('detail').classList.remove('notfound');
     $('detail').classList.add('open');
-    history.pushState({ agent: a.terminal_id }, '');
     loadOutput();
   }
 
-  function closeDetail(fromPop) {
-    if (!$('detail').classList.contains('open')) return;
-    $('detail').classList.remove('open');
+  function showNotFound(terminalId) {
     current = null;
-    if (!fromPop && history.state && history.state.agent) history.back();
+    $('dTitle').textContent = 'Session not found';
+    $('dStatus').className = 'status unknown';
+    $('dSub').textContent = terminalId;
+    $('outText').textContent = '';
+    $('out').querySelector('.placeholder')?.remove();
+    const p = document.createElement('div');
+    p.className = 'placeholder';
+    p.append('This session no longer exists. ');
+    const link = document.createElement('a');
+    link.href = '#/';
+    link.textContent = 'Back to home';
+    p.appendChild(link);
+    $('out').appendChild(p);
+    $('detail').classList.add('open', 'notfound');
   }
-  window.addEventListener('popstate', () => closeDetail(true));
-  $('backBtn').addEventListener('click', () => closeDetail(false));
+
+  function hideDetail() {
+    current = null;
+    cameFromHome = false;
+    outQueued = false;
+    clearTimeout(outDebounce);
+    $('detail').classList.remove('open', 'notfound');
+  }
+
+  $('backBtn').addEventListener('click', () => {
+    // Deep-linked pages have no home entry to go back to.
+    if (cameFromHome) history.back();
+    else location.hash = '#/';
+  });
 
   function updateDetailHeader() {
     if (!current) return;
@@ -398,6 +447,8 @@
 
   async function loadOutput() {
     if (!current) return;
+    if (outFetching) { outQueued = true; return; } // never two fetches at once
+    outFetching = true;
     const btn = $('refreshBtn');
     btn.classList.add('spin');
     try {
@@ -414,13 +465,29 @@
         out.appendChild(p);
       }
       if (stick) out.scrollTop = out.scrollHeight;
+      lastOutputAt = Date.now();
     } catch (e) {
       toast('Read failed: ' + e.message);
     } finally {
       btn.classList.remove('spin');
+      outFetching = false;
+      if (outQueued) { outQueued = false; loadOutput(); } // newer revision arrived mid-fetch
     }
   }
-  $('refreshBtn').addEventListener('click', loadOutput);
+  $('refreshBtn').addEventListener('click', () => loadOutput());
+
+  // Coalesce pane_updated bursts with a trailing debounce.
+  function scheduleOutput(rev) {
+    if (typeof rev === 'number') lastEventRev = Math.max(lastEventRev, rev);
+    clearTimeout(outDebounce);
+    outDebounce = setTimeout(loadOutput, 400);
+  }
+
+  // Safety net: herdr's event queue can lag far behind a fast-producing pane,
+  // so keep a working agent's output fresh even without new revisions.
+  setInterval(() => {
+    if (current && current.agent_status === 'working' && Date.now() - lastOutputAt > 9000) loadOutput();
+  }, 10000);
 
   $('sendForm').addEventListener('submit', async (ev) => {
     ev.preventDefault();
@@ -473,6 +540,7 @@
     const el = $('conn');
     el.className = mode;
     $('connLabel').textContent = mode === 'live' ? 'live' : mode === 'poll' ? 'polling' : 'connecting';
+    $('detail').classList.toggle('live', mode === 'live');
   }
 
   function queueRefetch() {
@@ -481,7 +549,7 @@
   }
 
   // Update one agent card in place (status dot, title, state label).
-  function patchAgent(paneId, { agent_status, title }) {
+  function patchAgent(paneId, { agent_status, title, revision }) {
     let hit = null;
     for (const ws of overview.workspaces)
       for (const a of ws.agents)
@@ -498,20 +566,13 @@
       card.querySelector('.state').textContent = hit.agent_status;
     }
     if (current && current.pane_id === paneId) {
+      // herdr replays recent revisions on each tick; ignore stale ones.
+      if (typeof revision === 'number' && revision <= lastEventRev) return;
       const statusChanged = current.agent_status !== hit.agent_status;
       current = hit;
       updateDetailHeader();
-      if (statusChanged) loadOutput(); else throttledOutput();
+      if (typeof revision === 'number' || statusChanged) scheduleOutput(revision);
     }
-  }
-
-  // pane_updated fires on every output tick; refresh the open terminal at most every 3s.
-  let lastAutoLoad = 0;
-  function throttledOutput() {
-    const now = Date.now();
-    if (now - lastAutoLoad < 3000) return;
-    lastAutoLoad = now;
-    loadOutput();
   }
 
   function startSSE() {
@@ -524,7 +585,11 @@
     });
     es.addEventListener('pane_updated', (ev) => {
       const p = JSON.parse(ev.data).pane;
-      if (p) patchAgent(p.pane_id, { agent_status: p.agent_status, title: p.terminal_title_stripped });
+      if (p) patchAgent(p.pane_id, { agent_status: p.agent_status, title: p.terminal_title_stripped, revision: p.revision });
+    });
+    // Upstream resubscribed: revision numbering may restart, so resync.
+    es.addEventListener('connected', () => {
+      if (current) { lastEventRev = -1; scheduleOutput(); }
     });
     ['workspace_updated', 'workspace_created', 'workspace_closed', 'workspace_renamed',
      'tab_renamed', 'tab_created', 'tab_closed',
@@ -536,7 +601,10 @@
 
   function startPolling() {
     if (pollTimer) return;
-    pollTimer = setInterval(loadOverview, 10000);
+    pollTimer = setInterval(() => {
+      loadOverview();
+      if (current) loadOutput();
+    }, 10000);
   }
   function stopPolling() {
     clearInterval(pollTimer);
@@ -544,10 +612,13 @@
   }
 
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) loadOverview();
+    if (!document.hidden) {
+      loadOverview();
+      if (current) loadOutput();
+    }
   });
 
-  loadOverview();
+  loadOverview().then(route);
   startSSE();
 })();
 </script>

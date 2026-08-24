@@ -41,6 +41,30 @@ once and stores it in localStorage; all `/api` routes require it
 | `POST /api/panes/:paneId/keys` body `{keys: ["enter"]}` | `pane.send_keys` |
 | `GET /api/events` | SSE bridge over one long-lived `events.subscribe` connection |
 
+## UI routes
+
+Hash-based, so deep links and refresh work without server routing:
+
+- `#/` (or no hash) — home: workspaces and their agents.
+- `#/agent/<terminal_id>` — agent detail view. Directly loadable/bookmarkable;
+  if the terminal no longer exists the UI shows a "session not found" state
+  with a link home. Browser back returns to the list.
+
+## Live updates (detail view)
+
+- The detail view refetches output when a `pane_updated` event for the open
+  pane carries a `revision` newer than the last one seen, coalesced with a
+  400ms trailing debounce; only one fetch runs at a time (a newer revision
+  arriving mid-fetch queues exactly one follow-up).
+- Safety net: while the agent is `working`, output is also refreshed every
+  10s if no revision-driven fetch happened — herdr's event delivery can lag
+  far behind a fast-producing pane (see protocol notes), while reads are
+  always current.
+- Auto-scroll to bottom only happens when already at/near the bottom, so
+  reading scrollback is never interrupted.
+- The detail header shows a green "live" dot while SSE is connected; when SSE
+  drops, the existing 10s polling fallback also refreshes the open detail.
+
 ## herdr protocol notes
 
 - Wire format: newline-delimited JSON over the Unix socket.
@@ -54,7 +78,14 @@ once and stores it in localStorage; all `/api` routes require it
 - Subscription types are dotted (`pane.updated`), but the streamed event names
   use **underscores** (`{"event":"pane_updated","data":{...}}`). `pane_updated`
   fires on every output tick and carries the full pane object (including
-  `agent_status` and `terminal_title_stripped`).
+  `agent_status`, `revision` and `terminal_title_stripped`).
+- **Event delivery is queued/throttled per subscription** (observed ~10
+  events/s): a fast-producing pane can leave a long-lived subscription far
+  behind (event `revision` hundreds below the pane's real revision from
+  `agent.list`/`agent.read`), replaying stale windows. Reads are always
+  current, so consumers should treat events as refresh hints, never mix the
+  event revision counter with the read/list one, and refresh on a timer as a
+  fallback.
 - `agent.read` / `pane.read` results wrap the payload:
   `{type:"pane_read", read:{text, revision, truncated, ...}}` — the bridge
   unwraps `read` for `GET /api/agents/:id/output`.
