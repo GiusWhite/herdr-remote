@@ -274,7 +274,8 @@ function serveStatic(res, urlPath) {
 // ---- Routes ----
 async function handleApi(req, res, url) {
   if (!authorized(req, url)) return sendJSON(res, 401, { error: 'unauthorized' });
-  const parts = url.pathname.split('/').filter(Boolean); // ['api', ...]
+  // decode segments: pane ids contain ':' which clients URL-encode
+  const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent); // ['api', ...]
 
   try {
     if (req.method === 'GET' && url.pathname === '/api/health') {
