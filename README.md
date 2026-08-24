@@ -37,6 +37,7 @@ once and stores it in localStorage; all `/api` routes require it
 | `GET /api/health` | `ping` |
 | `GET /api/overview` | `workspace.list` + `agent.list`, agents grouped per workspace |
 | `GET /api/agents/:terminalId/output?lines=300&source=recent&format=text` | `agent.read` |
+| `GET /api/agents/:terminalId/stream` | per-pane live SSE: `agent.read` loop every 350ms, pushes `output` events with the full text only when it changed; max 4 concurrent streams (429 beyond) |
 | `POST /api/agents/:terminalId/send` body `{text}` | `agent.send` |
 | `POST /api/panes/:paneId/keys` body `{keys: ["enter"]}` | `pane.send_keys` |
 | `GET /api/events` | SSE bridge over one long-lived `events.subscribe` connection |
@@ -52,18 +53,16 @@ Hash-based, so deep links and refresh work without server routing:
 
 ## Live updates (detail view)
 
-- The detail view refetches output when a `pane_updated` event for the open
-  pane carries a `revision` newer than the last one seen, coalesced with a
-  400ms trailing debounce; only one fetch runs at a time (a newer revision
-  arriving mid-fetch queues exactly one follow-up).
-- Safety net: while the agent is `working`, output is also refreshed every
-  10s if no revision-driven fetch happened — herdr's event delivery can lag
-  far behind a fast-producing pane (see protocol notes), while reads are
-  always current.
+- On open, the detail view connects `GET /api/agents/:id/stream` — a dedicated
+  per-pane SSE stream that pushes the pane's text within ~350ms of any change
+  (near-real-time). The stream is closed when navigating away; the green
+  "live" dot in the detail header reflects this stream's state.
+- Fallback (stream rejected by the 4-stream cap, or errored): the older
+  behavior takes over — `pane_updated` revision hints trigger debounced
+  refetches, plus a 10s keep-fresh tick while the agent is `working`. When
+  the global SSE is down too, 10s polling refreshes the open detail.
 - Auto-scroll to bottom only happens when already at/near the bottom, so
   reading scrollback is never interrupted.
-- The detail header shows a green "live" dot while SSE is connected; when SSE
-  drops, the existing 10s polling fallback also refreshes the open detail.
 
 ## herdr protocol notes
 
@@ -86,6 +85,18 @@ Hash-based, so deep links and refresh work without server routing:
   current, so consumers should treat events as refresh hints, never mix the
   event revision counter with the read/list one, and refresh on a timer as a
   fallback.
+- **`pane.updated` never fires for panes in unfocused workspaces** (verified:
+  zero events for a background pane during 8s of steady output, while its
+  `pane.get` revision advanced). Events cannot drive a live view of a
+  background pane; only reads can.
+- **`pane.wait_for_output` matches existing buffer content** (returns
+  immediately if the match is already on screen), so it cannot wait for "any
+  new output". It blocks until match or `timeout_ms` (error `timeout`), one
+  response per connection; the result wraps a full current read but its
+  top-level `revision` is always 0. `events.wait` accepts only
+  `pane_agent_status_changed` matches (`pane_output_changed` is in the schema
+  but returns `unsupported_event_wait_match`). Hence the `/stream` endpoint
+  uses a 350ms `agent.read` compare loop.
 - `agent.read` / `pane.read` results wrap the payload:
   `{type:"pane_read", read:{text, revision, truncated, ...}}` — the bridge
   unwraps `read` for `GET /api/agents/:id/output`.

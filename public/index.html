@@ -279,6 +279,8 @@
   let outFetching = false;
   let outQueued = false;
   let lastOutputAt = 0;
+  let paneEs = null;         // per-pane live SSE stream
+  let paneLive = false;
 
   // ---- API ----
   async function api(path, opts = {}) {
@@ -404,6 +406,7 @@
     $('detail').classList.remove('notfound');
     $('detail').classList.add('open');
     loadOutput();
+    openPaneStream();
   }
 
   function showNotFound(terminalId) {
@@ -429,6 +432,7 @@
     cameFromHome = false;
     outQueued = false;
     clearTimeout(outDebounce);
+    closePaneStream();
     $('detail').classList.remove('open', 'notfound');
   }
 
@@ -445,6 +449,23 @@
     $('dSub').textContent = (current.agent_status || 'unknown') + ' · ' + (current.cwd || '');
   }
 
+  // Render output text, keeping the user's place unless they're at the bottom.
+  function renderOutput(text) {
+    text = (text || '').replace(/\s+$/, '');
+    const out = $('out');
+    const stick = out.scrollTop + out.clientHeight >= out.scrollHeight - 60;
+    $('outText').textContent = text;
+    out.querySelector('.placeholder')?.remove();
+    if (!text) {
+      const p = document.createElement('div');
+      p.className = 'placeholder';
+      p.textContent = 'No output yet.';
+      out.appendChild(p);
+    }
+    if (stick) out.scrollTop = out.scrollHeight;
+    lastOutputAt = Date.now();
+  }
+
   async function loadOutput() {
     if (!current) return;
     if (outFetching) { outQueued = true; return; } // never two fetches at once
@@ -453,19 +474,7 @@
     btn.classList.add('spin');
     try {
       const r = await api('/api/agents/' + encodeURIComponent(current.terminal_id) + '/output?lines=300&source=recent');
-      const text = (r.text ?? r.output ?? r.content ?? '').replace(/\s+$/, '');
-      const out = $('out');
-      const stick = out.scrollTop + out.clientHeight >= out.scrollHeight - 60;
-      $('outText').textContent = text || '';
-      $('out').querySelector('.placeholder')?.remove();
-      if (!text) {
-        const p = document.createElement('div');
-        p.className = 'placeholder';
-        p.textContent = 'No output yet.';
-        out.appendChild(p);
-      }
-      if (stick) out.scrollTop = out.scrollHeight;
-      lastOutputAt = Date.now();
+      renderOutput(r.text ?? r.output ?? r.content ?? '');
     } catch (e) {
       toast('Read failed: ' + e.message);
     } finally {
@@ -477,17 +486,49 @@
   $('refreshBtn').addEventListener('click', () => loadOutput());
 
   // Coalesce pane_updated bursts with a trailing debounce.
+  // Only a fallback: the per-pane stream renders directly while connected.
   function scheduleOutput(rev) {
     if (typeof rev === 'number') lastEventRev = Math.max(lastEventRev, rev);
+    if (paneLive) return;
     clearTimeout(outDebounce);
     outDebounce = setTimeout(loadOutput, 400);
   }
 
-  // Safety net: herdr's event queue can lag far behind a fast-producing pane,
-  // so keep a working agent's output fresh even without new revisions.
+  // Safety net when the per-pane stream is down: herdr's event queue can lag
+  // far behind a fast-producing pane, so keep a working agent's output fresh.
   setInterval(() => {
-    if (current && current.agent_status === 'working' && Date.now() - lastOutputAt > 9000) loadOutput();
+    if (!paneLive && current && current.agent_status === 'working' && Date.now() - lastOutputAt > 9000) loadOutput();
   }, 10000);
+
+  // ---- Per-pane live stream (near-real-time output) ----
+  function setPaneLive(on) {
+    paneLive = on;
+    $('detail').classList.toggle('live', on);
+  }
+
+  function openPaneStream() {
+    closePaneStream();
+    if (!current) return;
+    const url = '/api/agents/' + encodeURIComponent(current.terminal_id) + '/stream'
+      + (token ? '?token=' + encodeURIComponent(token) : '');
+    paneEs = new EventSource(url);
+    paneEs.onopen = () => setPaneLive(true);
+    paneEs.addEventListener('output', (ev) => {
+      setPaneLive(true);
+      renderOutput(JSON.parse(ev.data).text);
+    });
+    paneEs.addEventListener('stream_error', () => closePaneStream()); // fall back to hints/polling
+    paneEs.onerror = () => {
+      // Non-200 (e.g. stream cap) closes for good; network errors keep retrying.
+      setPaneLive(false);
+      if (paneEs && paneEs.readyState === EventSource.CLOSED) paneEs = null;
+    };
+  }
+
+  function closePaneStream() {
+    if (paneEs) { paneEs.close(); paneEs = null; }
+    setPaneLive(false);
+  }
 
   $('sendForm').addEventListener('submit', async (ev) => {
     ev.preventDefault();
@@ -540,7 +581,6 @@
     const el = $('conn');
     el.className = mode;
     $('connLabel').textContent = mode === 'live' ? 'live' : mode === 'poll' ? 'polling' : 'connecting';
-    $('detail').classList.toggle('live', mode === 'live');
   }
 
   function queueRefetch() {
@@ -614,7 +654,11 @@
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
       loadOverview();
-      if (current) loadOutput();
+      if (current) {
+        loadOutput();
+        // Mobile browsers kill EventSource in background; revive the stream.
+        if (!paneEs || paneEs.readyState === EventSource.CLOSED) openPaneStream();
+      }
     }
   });
 

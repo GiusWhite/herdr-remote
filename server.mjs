@@ -169,6 +169,60 @@ function queueResubscribe() {
   }, 500);
 }
 
+// ---- Per-pane live streams ----
+// events.subscribe never emits pane_updated for unfocused panes and
+// pane.wait_for_output matches existing content, so a short read-compare
+// loop is the only reliable liveness source. Local socket, capped streams.
+const MAX_PANE_STREAMS = 4;
+const STREAM_POLL_MS = 350;
+let paneStreams = 0;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function handleAgentStream(req, res, terminalId) {
+  if (paneStreams >= MAX_PANE_STREAMS) {
+    return sendJSON(res, 429, { error: `too many live streams (max ${MAX_PANE_STREAMS})` });
+  }
+  paneStreams++;
+  let closed = false;
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    paneStreams--;
+  };
+  req.on('close', cleanup);
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-store',
+    Connection: 'keep-alive',
+  });
+  res.write(': connected\n\n');
+
+  let lastText = null;
+  let lastWrite = Date.now();
+  while (!closed) {
+    try {
+      const result = await rpc('agent.read', { target: terminalId, source: 'recent', lines: 300, format: 'text' });
+      const text = (result?.read ?? result)?.text ?? '';
+      if (text !== lastText) {
+        lastText = text;
+        res.write(`event: output\ndata: ${JSON.stringify({ text })}\n\n`);
+        lastWrite = Date.now();
+      } else if (Date.now() - lastWrite > 25000) {
+        res.write(': ping\n\n');
+        lastWrite = Date.now();
+      }
+    } catch (e) {
+      if (!closed) {
+        res.write(`event: stream_error\ndata: ${JSON.stringify({ error: e.message })}\n\n`);
+        res.end();
+      }
+      break;
+    }
+    await sleep(STREAM_POLL_MS);
+  }
+  cleanup();
+}
+
 // ---- HTTP helpers ----
 function sendJSON(res, status, body) {
   const data = JSON.stringify(body);
@@ -239,6 +293,10 @@ async function handleApi(req, res, url) {
         agents: byWorkspace.get(w.workspace_id) || [],
       }));
       return sendJSON(res, 200, { workspaces });
+    }
+
+    if (req.method === 'GET' && parts[1] === 'agents' && parts[3] === 'stream') {
+      return handleAgentStream(req, res, parts[2]);
     }
 
     if (req.method === 'GET' && parts[1] === 'agents' && parts[3] === 'output') {
