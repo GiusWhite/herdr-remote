@@ -94,6 +94,40 @@ a bumped `SW_VERSION` is picked up on the next visit; the UI then shows an
 | `POST /api/panes/:paneId/keys` body `{keys: ["enter"]}` | `pane.send_keys` |
 | `GET /api/events` | SSE bridge over one long-lived `events.subscribe` connection, plus authoritative `overview` snapshots |
 
+## Managing agents
+
+Three mutating routes let the UI start, rename and close agents. Like every
+non-SSE route they are Bearer-auth only, and each call is written to the audit
+log (see [LAN mode](#reach-it-from-your-phone-lan-mode)) — payload content is
+never logged, only its byte length plus `workspace`/`cwd` for start and
+`target` for rename/close. Each success also triggers an immediate overview
+poll so connected clients see the change without waiting for the 2.5s tick.
+
+| Route | Body | Maps to |
+|---|---|---|
+| `POST /api/agents` | `{name, cwd, workspace_id?, argv: string[]}` — `name` non-empty ≤ 64 chars, `argv` non-empty string array (no shell: split the command yourself), `cwd` optional string | `agent.start` → `{type:"agent_started", agent:{terminal_id, pane_id, …}, argv}` |
+| `POST /api/agents/:terminalId/rename` | `{name}` — empty or `null` clears the custom name | `agent.rename` → `{type:"agent_info", agent:{…}}` |
+| `POST /api/panes/:paneId/close` | — | `pane.close` → `{type:"ok"}` |
+
+herdr param schemas (from `herdr api schema --json`): `agent.start`
+`{name, argv, cwd?, workspace_id?, tab_id?, split?, env?, focus?}`;
+`agent.rename` `{target, name: string|null}`; `pane.close` `{pane_id}`.
+A custom name comes back as `name` on `agent.list` entries and takes precedence
+over the terminal title in the UI.
+
+UI affordances:
+
+- **+** on each workspace header opens a bottom sheet: Name, Directory
+  (prefilled with the workspace's worktree checkout or the cwd of one of its
+  agents — `workspace.list` itself carries no cwd) and a Command chooser with
+  preset chips `claude`, `claude --continue`, `codex` plus a custom field
+  (split on whitespace into argv). On success the UI opens the new agent.
+- **⋯** on each agent card (the rest of the card still opens the detail view)
+  and in the detail header: *Rename* swaps the title into an inline input
+  (Enter/blur saves, Esc cancels, empty clears); *Close* asks inline
+  ("Close this agent? Yes / No" — no `window.confirm`) before calling the
+  route. Closing from the detail view returns home.
+
 ## UI routes
 
 Hash-based, so deep links and refresh work without server routing:

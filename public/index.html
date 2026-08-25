@@ -108,21 +108,63 @@
     display: flex; align-items: baseline; gap: 8px;
   }
   section.ws h2 .count { font-weight: 400; letter-spacing: 0; text-transform: none; }
+  section.ws h2 .add {
+    margin-left: auto; align-self: center; width: 32px; height: 32px; border-radius: 8px;
+    display: inline-flex; align-items: center; justify-content: center; color: var(--text-2);
+  }
+  section.ws h2 .add:active { background: var(--surface-2); }
+  section.ws h2 .add svg { width: 18px; height: 18px; stroke: currentColor; }
   .empty-ws { font-size: 14px; color: var(--text-2); padding: 2px 2px 0; }
 
   .agent {
-    display: flex; align-items: center; gap: 14px;
+    display: flex; flex-wrap: wrap; align-items: center;
     width: 100%; text-align: left;
     background: var(--surface);
     border: 1px solid var(--line);
     border-radius: 14px;
-    padding: 14px 16px;
+    padding: 0 6px 0 16px;
     min-height: 64px;
     margin-bottom: 10px;
     box-shadow: var(--shadow);
+  }
+  .agent .open {
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: 14px;
+    padding: 14px 0; text-align: left; cursor: pointer;
     transition: transform .12s ease-out;
   }
-  .agent:active { transform: scale(.985); }
+  .agent .open:active { transform: scale(.985); }
+  .agent .open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+  .agent .more {
+    flex: none; width: 40px; height: 40px; border-radius: 10px; margin-left: 4px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text-2); font-size: 18px; letter-spacing: .05em;
+  }
+  .agent .more:active, .agent .more[aria-expanded="true"] { background: var(--surface-2); color: var(--text); }
+  .agent .title input, #detail .bar .t input {
+    width: 100%; font: inherit; color: inherit; background: transparent;
+    border: 0; border-bottom: 1px solid var(--accent); padding: 0; outline: none;
+  }
+  .menu {
+    flex-basis: 100%; display: flex; align-items: center; gap: 8px;
+    padding: 4px 10px 10px 0; font-size: 13px;
+  }
+  .menu button {
+    height: 32px; padding: 0 12px; border-radius: 8px;
+    background: var(--surface-2); border: 1px solid var(--line); color: var(--text);
+  }
+  .menu button.danger { color: var(--blocked); }
+  .menu .q { color: var(--text-2); margin-right: 2px; }
+  #detail .menu {
+    position: absolute; right: max(8px, env(safe-area-inset-right)); top: 100%;
+    flex-basis: auto; padding: 8px; border-radius: 10px; z-index: 11;
+    background: color-mix(in srgb, var(--term-bg) 80%, white);
+    border: 1px solid rgba(255,255,255,.12); color: var(--term-fg);
+  }
+  #detail .menu button { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.14); color: var(--term-fg); }
+  #detail .menu button.danger { color: var(--ansi-9); }
+  #detail .menu .q { color: rgba(214,214,220,.6); }
+  #detail .bar { position: relative; }
+  #detail.notfound #moreBtn { visibility: hidden; }
   .agent.blocked { border-left: 3px solid var(--blocked); }
   .status {
     flex: none; width: 11px; height: 11px; border-radius: 50%;
@@ -283,6 +325,39 @@
   #composer.keymode-on textarea { border-color: var(--accent); }
   #composer .send svg { width: 18px; height: 18px; stroke: currentColor; }
 
+  /* ---- New-agent bottom sheet ---- */
+  #sheet {
+    position: fixed; inset: 0; z-index: 15; display: none;
+    background: rgba(0,0,0,.45);
+  }
+  #sheet.open { display: block; }
+  #sheet form {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    max-width: 640px; margin: 0 auto;
+    padding: 16px max(16px, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 16px) max(16px, env(safe-area-inset-left));
+    background: var(--surface); color: var(--text);
+    border-radius: 18px 18px 0 0; border-top: 1px solid var(--line);
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  #sheet h3 { font-size: 16px; font-weight: 600; }
+  #sheet label { font-size: 12px; color: var(--text-2); display: block; margin-bottom: 4px; }
+  #sheet input[type="text"] {
+    width: 100%; height: 42px; padding: 0 12px; border-radius: 10px;
+    font: 14px/1 ui-monospace, "SF Mono", Menlo, monospace; color: var(--text);
+    background: var(--surface-2); border: 1px solid var(--line);
+  }
+  #sheet .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  #sheet .chips button {
+    height: 32px; padding: 0 12px; border-radius: 999px;
+    font: 12px/1 ui-monospace, "SF Mono", Menlo, monospace;
+    background: var(--surface-2); border: 1px solid var(--line);
+  }
+  #sheet .chips button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #sheet .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+  #sheet .actions button { height: 42px; padding: 0 18px; border-radius: 10px; border: 1px solid var(--line); }
+  #sheet .actions .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #sheet .actions .primary:disabled { opacity: .5; }
+
   #toast {
     position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 90px);
     transform: translateX(-50%) translateY(8px);
@@ -319,6 +394,7 @@
     <button class="iconbtn" id="refreshBtn" aria-label="Refresh output">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg>
     </button>
+    <button class="iconbtn" id="moreBtn" aria-label="Agent actions" aria-haspopup="menu" aria-expanded="false">⋯</button>
   </div>
   <div id="out"><pre id="outText"></pre></div>
   <div id="composer">
@@ -341,6 +417,33 @@
       </button>
     </form>
   </div>
+</div>
+
+<div id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+  <form id="sheetForm">
+    <h3 id="sheetTitle">New agent</h3>
+    <div>
+      <label for="naName">Name</label>
+      <input type="text" id="naName" maxlength="64" required autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <div>
+      <label for="naCwd">Directory</label>
+      <input type="text" id="naCwd" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="/path/to/project">
+    </div>
+    <div>
+      <label for="naCmd">Command</label>
+      <div class="chips">
+        <button type="button" data-cmd="claude">claude</button>
+        <button type="button" data-cmd="claude --continue">claude --continue</button>
+        <button type="button" data-cmd="codex">codex</button>
+      </div>
+      <input type="text" id="naCmd" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="custom command (split on whitespace, no shell)">
+    </div>
+    <div class="actions">
+      <button type="button" id="naCancel">Cancel</button>
+      <button type="submit" class="primary" id="naSubmit">Start</button>
+    </div>
+  </form>
 </div>
 
 <div id="toast" role="status"></div>
@@ -390,6 +493,14 @@
   const basename = (p) => (p || '').replace(/\/+$/, '').split('/').pop() || p || '';
   // Event titles keep the agent's spinner glyph; drop leading symbols.
   const cleanTitle = (t) => (t || '').replace(/^[^\p{L}\p{N}]+\s*/u, '');
+  // A user-set name wins over the terminal title; plain shells have no agent.
+  const agentTitle = (a) => a.name || cleanTitle(a.terminal_title_stripped || a.terminal_title) || a.agent || 'process';
+  const agentKind = (a) => a.agent || 'process';
+  const postJSON = (path, body) => api(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  });
 
   // ---- Home rendering ----
   // Blocked agents first, then most recently active; sessions with no known
@@ -417,8 +528,13 @@
   }
 
   let renderedSig = null;
+  let cardMenuOpen = null;   // terminal_id whose card menu / inline rename is open
+  let renderPending = false;
   function render() {
     renderAttention();
+    // Don't repaint under an open card menu or inline rename; catch up on close.
+    if (cardMenuOpen) { renderPending = true; return; }
+    renderPending = false;
     const root = $('workspaces');
     const sections = overview.workspaces.map((ws) => ({ ws, agents: byRecency(ws.agents) }));
     // Timestamps tick constantly; only touch the DOM when something visible moved.
@@ -426,7 +542,7 @@
     // that changes on every tick but is stripped before rendering.
     const sig = JSON.stringify(sections.map(({ ws, agents }) =>
       [ws.workspace_id, ws.label, agents.map((a) =>
-        [a.terminal_id, a.agent_status, cleanTitle(a.terminal_title_stripped) || a.agent, a.agent, basename(a.cwd)])]));
+        [a.terminal_id, a.agent_status, agentTitle(a), a.agent, basename(a.cwd)])]));
     if (sig === renderedSig) return;
     renderedSig = sig;
     root.replaceChildren();
@@ -443,6 +559,13 @@
       c.className = 'count';
       c.textContent = agents.length === 1 ? '1 agent' : agents.length + ' agents';
       h.appendChild(c);
+      const add = document.createElement('button');
+      add.type = 'button';
+      add.className = 'add';
+      add.setAttribute('aria-label', 'New agent in ' + (ws.label || 'workspace ' + ws.number));
+      add.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>';
+      add.addEventListener('click', () => openSheet(ws));
+      h.appendChild(add);
       sec.appendChild(h);
       if (!agents.length) {
         const p = document.createElement('p');
@@ -456,32 +579,223 @@
   }
 
   function agentCard(a) {
-    const btn = document.createElement('button');
-    btn.className = 'agent' + (a.agent_status === 'blocked' ? ' blocked' : '');
-    btn.dataset.pane = a.pane_id;
+    const card = document.createElement('div');
+    card.className = 'agent' + (a.agent_status === 'blocked' ? ' blocked' : '');
+    card.dataset.pane = a.pane_id;
+    // A div with role=button: the title swaps to an <input> on rename, which
+    // cannot live inside a real <button>.
+    const open = document.createElement('div');
+    open.className = 'open';
+    open.setAttribute('role', 'button');
+    open.tabIndex = 0;
     const dot = document.createElement('span');
     dot.className = 'status ' + (a.agent_status || 'unknown');
     const meta = document.createElement('span');
     meta.className = 'meta';
     const title = document.createElement('span');
     title.className = 'title';
-    title.textContent = cleanTitle(a.terminal_title_stripped || a.terminal_title) || a.agent;
+    title.textContent = agentTitle(a);
     const sub = document.createElement('span');
     sub.className = 'sub';
     const state = document.createElement('span');
     state.className = 'state';
     state.textContent = a.agent_status || 'unknown';
-    sub.append(state, ' · ' + a.agent + ' · ' + basename(a.cwd));
+    sub.append(state, ' · ' + agentKind(a) + ' · ' + basename(a.cwd));
     meta.append(title, sub);
-    btn.append(dot, meta);
-    btn.insertAdjacentHTML('beforeend',
+    open.append(dot, meta);
+    open.insertAdjacentHTML('beforeend',
       '<svg class="chev" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>');
-    btn.addEventListener('click', () => {
+    const go = () => {
       cameFromHome = true;
       location.hash = '#/agent/' + encodeURIComponent(a.terminal_id);
+    };
+    open.addEventListener('click', (ev) => { if (!ev.target.closest('input')) go(); });
+    open.addEventListener('keydown', (ev) => {
+      if ((ev.key === 'Enter' || ev.key === ' ') && !ev.target.closest('input')) { ev.preventDefault(); go(); }
     });
-    return btn;
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'more';
+    more.textContent = '⋯';
+    more.setAttribute('aria-label', 'Actions for ' + agentTitle(a));
+    more.setAttribute('aria-haspopup', 'menu');
+    more.setAttribute('aria-expanded', 'false');
+    more.addEventListener('click', () => toggleMenu(card, more, a, title));
+    card.append(open, more);
+    return card;
   }
+
+  // ---- Card / detail action menu: Rename (inline) and Close (two-tap) ----
+  function closeMenus() {
+    document.querySelectorAll('.menu').forEach((m) => m.remove());
+    document.querySelectorAll('[aria-haspopup="menu"]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
+    const wasOpen = cardMenuOpen;
+    cardMenuOpen = null;
+    if (wasOpen && renderPending) render();
+  }
+
+  // Builds the menu into `host`; `titleEl` is what gets swapped for the rename input.
+  function buildMenu(host, trigger, a, titleEl, opts) {
+    const menu = document.createElement('div');
+    menu.className = 'menu';
+    menu.setAttribute('role', 'menu');
+    const mk = (label, cls, fn) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      if (cls) b.className = cls;
+      b.setAttribute('role', 'menuitem');
+      b.addEventListener('click', fn);
+      return b;
+    };
+    const showMain = () => {
+      menu.replaceChildren(
+        mk('Rename', '', () => { menu.remove(); trigger.setAttribute('aria-expanded', 'false'); inlineRename(a, titleEl, opts.onDone); }),
+        mk('Close', 'danger', showConfirm),
+      );
+    };
+    const showConfirm = () => {
+      const q = document.createElement('span');
+      q.className = 'q';
+      q.textContent = 'Close this agent?';
+      menu.replaceChildren(q, mk('Yes', 'danger', async () => {
+        try {
+          await postJSON('/api/panes/' + encodeURIComponent(a.pane_id) + '/close');
+          toast('Closed ' + agentTitle(a));
+          closeMenus();
+          opts.onClosed?.();
+        } catch (e) { toast('Close failed: ' + e.message); }
+      }), mk('No', '', showMain));
+    };
+    showMain();
+    host.appendChild(menu);
+    trigger.setAttribute('aria-expanded', 'true');
+    return menu;
+  }
+
+  function toggleMenu(card, more, a, titleEl) {
+    const already = card.querySelector('.menu');
+    closeMenus();
+    if (already) return;
+    cardMenuOpen = a.terminal_id;
+    buildMenu(card, more, a, titleEl, {
+      onDone: () => { cardMenuOpen = null; if (renderPending) render(); },
+    });
+  }
+
+  // Swaps the title for an input: Enter/blur saves, Esc cancels, empty clears.
+  function inlineRename(a, titleEl, onDone) {
+    if (titleEl.querySelector('input')) return;
+    const prev = titleEl.textContent;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = 64;
+    input.value = a.name || '';
+    input.placeholder = prev;
+    input.setAttribute('aria-label', 'Agent name');
+    titleEl.replaceChildren(input);
+    let finished = false;
+    const finish = async (save) => {
+      if (finished) return;
+      finished = true;
+      const next = input.value.trim();
+      titleEl.textContent = save && next ? next : prev;
+      if (save && next !== (a.name || '')) {
+        try {
+          await postJSON('/api/agents/' + encodeURIComponent(a.terminal_id) + '/rename', { name: next || null });
+          toast(next ? 'Renamed' : 'Name cleared');
+        } catch (e) {
+          titleEl.textContent = prev;
+          toast('Rename failed: ' + e.message);
+        }
+      }
+      onDone?.();
+    };
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
+      else if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', () => finish(true));
+    input.focus();
+    input.select();
+  }
+
+  // Tap outside dismisses any open menu (not while an inline rename has focus).
+  document.addEventListener('pointerdown', (ev) => {
+    if (ev.target.closest('.menu, .more, #moreBtn, .title input, #dTitle input')) return;
+    if (document.querySelector('.menu')) closeMenus();
+  });
+
+  $('moreBtn').addEventListener('click', () => {
+    if (!current) return;
+    const bar = $('moreBtn').parentElement;
+    const already = bar.querySelector('.menu');
+    closeMenus();
+    if (already) return;
+    buildMenu(bar, $('moreBtn'), current, $('dTitle'), {
+      onClosed: () => { location.hash = '#/'; },
+    });
+  });
+
+  // ---- New-agent sheet ----
+  const PRESETS = ['claude', 'claude --continue', 'codex'];
+  let sheetWs = null;
+
+  function syncChips() {
+    const v = $('naCmd').value.trim().replace(/\s+/g, ' ');
+    document.querySelectorAll('#sheet .chips button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.cmd === v)));
+  }
+
+  function openSheet(ws) {
+    sheetWs = ws;
+    $('naName').value = '';
+    // workspace.list has no cwd; use the worktree checkout or where its agents run.
+    $('naCwd').value = ws.worktree?.checkout_path || ws.agents.find((a) => a.cwd)?.cwd || '';
+    $('naCmd').value = PRESETS[0];
+    syncChips();
+    $('sheetTitle').textContent = 'New agent in ' + (ws.label || 'workspace ' + ws.number);
+    $('sheet').classList.add('open');
+    $('naName').focus();
+  }
+
+  function closeSheet() {
+    sheetWs = null;
+    $('sheet').classList.remove('open');
+  }
+
+  document.querySelectorAll('#sheet .chips button').forEach((b) => {
+    b.addEventListener('click', () => { $('naCmd').value = b.dataset.cmd; syncChips(); });
+  });
+  $('naCmd').addEventListener('input', syncChips);
+  $('naCancel').addEventListener('click', closeSheet);
+  $('sheet').addEventListener('click', (ev) => { if (ev.target === $('sheet')) closeSheet(); });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && $('sheet').classList.contains('open')) closeSheet();
+  });
+
+  $('sheetForm').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    if (!sheetWs) return;
+    const name = $('naName').value.trim();
+    const cwd = $('naCwd').value.trim();
+    const argv = $('naCmd').value.trim().split(/\s+/).filter(Boolean);
+    if (!name) { toast('Name is required'); return; }
+    if (!argv.length) { toast('Command is required'); return; }
+    const btn = $('naSubmit');
+    btn.disabled = true;
+    try {
+      const r = await postJSON('/api/agents', { name, cwd: cwd || null, workspace_id: sheetWs.workspace_id, argv });
+      toast('Started ' + name);
+      closeSheet();
+      await loadOverview();
+      const id = r?.agent?.terminal_id;
+      if (id) { cameFromHome = true; location.hash = '#/agent/' + encodeURIComponent(id); }
+    } catch (e) {
+      toast('Start failed: ' + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
   async function loadOverview() {
     try {
@@ -551,6 +865,7 @@
   }
 
   function hideDetail() {
+    closeMenus();
     current = null;
     cameFromHome = false;
     outQueued = false;
@@ -567,7 +882,7 @@
 
   function updateDetailHeader() {
     if (!current) return;
-    $('dTitle').textContent = cleanTitle(current.terminal_title_stripped) || current.agent;
+    if (!$('dTitle').querySelector('input')) $('dTitle').textContent = agentTitle(current);
     $('dStatus').className = 'status ' + (current.agent_status || 'unknown');
     $('dSub').textContent = (current.agent_status || 'unknown') + ' · ' + (current.cwd || '');
   }

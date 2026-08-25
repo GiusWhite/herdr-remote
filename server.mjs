@@ -571,6 +571,53 @@ async function handleApi(req, res, url) {
       return sendJSON(res, 200, result ?? { ok: true });
     }
 
+    if (req.method === 'POST' && url.pathname === '/api/agents') {
+      const { name, cwd, workspace_id, argv } = await readBody(req);
+      if (typeof name !== 'string' || !name.trim() || name.length > 64) {
+        return sendJSON(res, 400, { error: 'name must be a non-empty string of at most 64 chars' });
+      }
+      if (!Array.isArray(argv) || !argv.length || !argv.every((a) => typeof a === 'string')) {
+        return sendJSON(res, 400, { error: 'argv must be a non-empty string array' });
+      }
+      if (cwd !== undefined && cwd !== null && typeof cwd !== 'string') {
+        return sendJSON(res, 400, { error: 'cwd must be a string' });
+      }
+      if (workspace_id !== undefined && workspace_id !== null && typeof workspace_id !== 'string') {
+        return sendJSON(res, 400, { error: 'workspace_id must be a string' });
+      }
+      audit({
+        ip, route: 'agent.start', workspace: workspace_id ?? null, cwd: cwd || null,
+        bytes: Buffer.byteLength(name) + Buffer.byteLength(argv.join(' ')),
+      });
+      const params = { name: name.trim(), argv };
+      if (cwd) params.cwd = cwd;
+      if (workspace_id) params.workspace_id = workspace_id;
+      const result = await rpc('agent.start', params);
+      touchActivity(result?.agent?.terminal_id);
+      pollOverview();
+      return sendJSON(res, 200, result ?? { ok: true });
+    }
+
+    if (req.method === 'POST' && parts[1] === 'agents' && parts[3] === 'rename') {
+      const { name } = await readBody(req);
+      if (name !== undefined && name !== null && typeof name !== 'string') {
+        return sendJSON(res, 400, { error: 'name must be a string or null' });
+      }
+      const next = typeof name === 'string' && name.trim() ? name.trim() : null; // empty clears
+      audit({ ip, route: 'agent.rename', target: parts[2], bytes: next ? Buffer.byteLength(next) : 0 });
+      const result = await rpc('agent.rename', { target: parts[2], name: next });
+      touchActivity(parts[2]);
+      pollOverview();
+      return sendJSON(res, 200, result ?? { ok: true });
+    }
+
+    if (req.method === 'POST' && parts[1] === 'panes' && parts[3] === 'close') {
+      audit({ ip, route: 'pane.close', target: parts[2] });
+      const result = await rpc('pane.close', { pane_id: parts[2] });
+      pollOverview();
+      return sendJSON(res, 200, result ?? { ok: true });
+    }
+
     if (req.method === 'GET' && url.pathname === '/api/events') {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
