@@ -40,7 +40,7 @@ once and stores it in localStorage; all `/api` routes require it
 | `GET /api/agents/:terminalId/stream` | per-pane live SSE: `agent.read` loop every 350ms, pushes `output` events with the full text only when it changed; max 4 concurrent streams (429 beyond) |
 | `POST /api/agents/:terminalId/send` body `{text}` | `agent.send` |
 | `POST /api/panes/:paneId/keys` body `{keys: ["enter"]}` | `pane.send_keys` |
-| `GET /api/events` | SSE bridge over one long-lived `events.subscribe` connection |
+| `GET /api/events` | SSE bridge over one long-lived `events.subscribe` connection, plus authoritative `overview` snapshots |
 
 ## UI routes
 
@@ -50,6 +50,18 @@ Hash-based, so deep links and refresh work without server routing:
 - `#/agent/<terminal_id>` — agent detail view. Directly loadable/bookmarkable;
   if the terminal no longer exists the UI shows a "session not found" state
   with a link home. Browser back returns to the list.
+
+## Agent status (home list)
+
+Card status comes from **reads, never from events** — events are unreliable
+hints (they never fire for panes in unfocused workspaces, and replay stale
+statuses). While at least one SSE client is connected the server polls
+`workspace.list` + `agent.list` every 2.5s, compares the snapshot with the
+last one, and emits an `overview` SSE event only when it actually changed;
+with no clients connected it polls nothing. The client renders the list from
+those snapshots (coalesced 500ms), so finished sessions hold a steady status
+and closed workspaces disappear on their own. `pane_updated` is kept purely
+as an output-refresh hint for the open detail view.
 
 ## Live updates (detail view)
 
@@ -78,13 +90,23 @@ Hash-based, so deep links and refresh work without server routing:
   use **underscores** (`{"event":"pane_updated","data":{...}}`). `pane_updated`
   fires on every output tick and carries the full pane object (including
   `agent_status`, `revision` and `terminal_title_stripped`).
-- **Event delivery is queued/throttled per subscription** (observed ~10
-  events/s): a fast-producing pane can leave a long-lived subscription far
-  behind (event `revision` hundreds below the pane's real revision from
-  `agent.list`/`agent.read`), replaying stale windows. Reads are always
-  current, so consumers should treat events as refresh hints, never mix the
-  event revision counter with the read/list one, and refresh on a timer as a
-  fallback.
+- **Resubscribing replays a stale event window — never resubscribe in
+  response to an event.** A new `events.subscribe` re-delivers a window of
+  recent events, including lifecycle ones (`pane_created`, `pane_closed`,
+  `workspace_created`, …) and `pane_updated` events carrying *old* revisions
+  and *old* `agent_status`. If a client resubscribes whenever it sees a
+  lifecycle event, the replayed window triggers another resubscribe and the
+  loop never ends: measured here, a single `workspace create` produced 50
+  replays of `workspace_created`, 49 of a `workspace_closed` for a workspace
+  closed minutes earlier, and drove one pane's revision backwards from 1494
+  to 1030 with 49 regressions — which is what made agent status flicker.
+  A single static subscription is strictly monotonic and current (measured:
+  246 events over 30s, 0 regressions), so subscribe once and reconnect only
+  when the socket actually closes. An earlier note in this file blamed herdr
+  for lagging/throttling delivery; that was wrong — the replays were
+  self-inflicted.
+- Defensive rule for any consumer: keep a per-pane highwater `revision` and
+  drop events at or below it.
 - **`pane.updated` never fires for panes in unfocused workspaces** (verified:
   zero events for a background pane during 8s of steady output, while its
   `pane.get` revision advanced). Events cannot drive a live view of a

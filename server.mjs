@@ -93,32 +93,40 @@ function broadcast(name, data) {
 
 let eventsSock = null;
 let backoff = 1000;
-let resubscribeQueued = false;
 
-const GLOBAL_SUBS = [
+// Static subscription set: global pane.updated already carries agent_status,
+// so no per-pane pane.agent_status_changed subs are needed. That matters —
+// they were the only reason to resubscribe, and resubscribing replays a stale
+// event window whose lifecycle events triggered another resubscribe, looping
+// forever and flooding clients with outdated revisions.
+const SUBSCRIPTIONS = [
   'workspace.updated', 'workspace.created', 'workspace.closed', 'workspace.renamed',
   'tab.renamed', 'tab.created', 'tab.closed',
   'pane.created', 'pane.closed', 'pane.updated', 'pane.exited', 'pane.agent_detected',
 ].map((type) => ({ type }));
 
-async function buildSubscriptions() {
-  // pane.agent_status_changed requires pane_id, so subscribe per agent pane.
-  const subs = [...GLOBAL_SUBS];
-  try {
-    const { agents = [] } = await rpc('agent.list');
-    for (const a of agents) subs.push({ type: 'pane.agent_status_changed', pane_id: a.pane_id });
-  } catch { /* global subs still work */ }
-  return subs;
+// Highwater revision per pane; a replayed window can never reach clients.
+let paneHighwater = new Map();
+
+function isStalePaneEvent(data) {
+  const pane = data?.pane;
+  if (!pane?.pane_id || typeof pane.revision !== 'number') return false;
+  const seen = paneHighwater.get(pane.pane_id);
+  if (seen !== undefined && pane.revision <= seen) return true;
+  paneHighwater.set(pane.pane_id, pane.revision);
+  return false;
 }
 
-async function connectEvents() {
-  const subs = await buildSubscriptions();
+function connectEvents() {
   const sock = net.connect(socketPath);
   eventsSock = sock;
   let buf = '';
 
   sock.on('connect', () => {
-    sock.write(JSON.stringify({ id: '1', method: 'events.subscribe', params: { subscriptions: subs } }) + '\n');
+    // A fresh subscription streams current events; drop stale highwaters so a
+    // restarted herdr (revisions back to 0) can't be filtered out forever.
+    paneHighwater = new Map();
+    sock.write(JSON.stringify({ id: '1', method: 'events.subscribe', params: { subscriptions: SUBSCRIPTIONS } }) + '\n');
   });
 
   sock.on('data', (chunk) => {
@@ -138,11 +146,8 @@ async function connectEvents() {
       if (msg.event) {
         // Wire event names use underscores (e.g. "pane_updated"), unlike the
         // dotted subscription types.
+        if (isStalePaneEvent(msg.data)) continue;
         broadcast(msg.event, msg.data ?? {});
-        // Pane set changed: resubscribe so new agent panes get status subscriptions.
-        if (['pane_created', 'pane_closed', 'pane_agent_detected', 'pane_exited'].includes(msg.event)) {
-          queueResubscribe();
-        }
       }
     }
   });
@@ -157,16 +162,51 @@ async function connectEvents() {
   sock.on('close', retry);
 }
 
-function queueResubscribe() {
-  if (resubscribeQueued) return;
-  resubscribeQueued = true;
-  setTimeout(() => {
-    resubscribeQueued = false;
-    const old = eventsSock;
-    eventsSock = null; // prevent the close handler from double-reconnecting
-    old?.destroy();
-    connectEvents();
-  }, 500);
+// ---- Authoritative overview snapshots ----
+// Events are unreliable hints: they never fire for panes in unfocused
+// workspaces, and status flips on replay. Reads are always current, so while
+// a client is watching we poll and broadcast the snapshot when it changes.
+const OVERVIEW_POLL_MS = 2500;
+let overviewTimer = null;
+let lastOverviewJSON = null;
+
+async function buildOverview() {
+  const [ws, ag] = await Promise.all([rpc('workspace.list'), rpc('agent.list')]);
+  const byWorkspace = new Map();
+  for (const a of ag.agents || []) {
+    if (!byWorkspace.has(a.workspace_id)) byWorkspace.set(a.workspace_id, []);
+    byWorkspace.get(a.workspace_id).push(a);
+  }
+  return {
+    workspaces: (ws.workspaces || []).map((w) => ({
+      ...w,
+      agents: byWorkspace.get(w.workspace_id) || [],
+    })),
+  };
+}
+
+async function pollOverview() {
+  if (!sseClients.size) return;
+  try {
+    const snapshot = await buildOverview();
+    const json = JSON.stringify(snapshot);
+    if (json !== lastOverviewJSON) {
+      lastOverviewJSON = json;
+      broadcast('overview', snapshot);
+    }
+  } catch { /* transient; next tick retries */ }
+}
+
+function startOverviewPolling() {
+  if (overviewTimer) return;
+  overviewTimer = setInterval(pollOverview, OVERVIEW_POLL_MS);
+  pollOverview();
+}
+
+function stopOverviewPolling() {
+  clearInterval(overviewTimer);
+  overviewTimer = null;
+  lastOverviewJSON = null; // next client gets a snapshot immediately
 }
 
 // ---- Per-pane live streams ----
@@ -283,17 +323,7 @@ async function handleApi(req, res, url) {
     }
 
     if (req.method === 'GET' && url.pathname === '/api/overview') {
-      const [ws, ag] = await Promise.all([rpc('workspace.list'), rpc('agent.list')]);
-      const byWorkspace = new Map();
-      for (const a of ag.agents || []) {
-        if (!byWorkspace.has(a.workspace_id)) byWorkspace.set(a.workspace_id, []);
-        byWorkspace.get(a.workspace_id).push(a);
-      }
-      const workspaces = (ws.workspaces || []).map((w) => ({
-        ...w,
-        agents: byWorkspace.get(w.workspace_id) || [],
-      }));
-      return sendJSON(res, 200, { workspaces });
+      return sendJSON(res, 200, await buildOverview());
     }
 
     if (req.method === 'GET' && parts[1] === 'agents' && parts[3] === 'stream') {
@@ -333,8 +363,13 @@ async function handleApi(req, res, url) {
       });
       res.write(': connected\n\n');
       sseClients.add(res);
+      startOverviewPolling();
       const ping = setInterval(() => res.write(': ping\n\n'), 25000);
-      req.on('close', () => { clearInterval(ping); sseClients.delete(res); });
+      req.on('close', () => {
+        clearInterval(ping);
+        sseClients.delete(res);
+        if (!sseClients.size) stopOverviewPolling();
+      });
       return;
     }
 

@@ -624,53 +624,35 @@
     refetchTimer = setTimeout(loadOverview, 300);
   }
 
-  // Update one agent card in place (status dot, title, state label).
-  function patchAgent(paneId, { agent_status, title, revision }) {
-    let hit = null;
-    for (const ws of overview.workspaces)
-      for (const a of ws.agents)
-        if (a.pane_id === paneId) {
-          if (agent_status) a.agent_status = agent_status;
-          if (title) { a.terminal_title = title; a.terminal_title_stripped = title; }
-          hit = a;
-        }
-    if (!hit) { queueRefetch(); return; }
-    const card = document.querySelector('.agent[data-pane="' + CSS.escape(paneId) + '"]');
-    if (card) {
-      card.querySelector('.status').className = 'status ' + hit.agent_status;
-      card.querySelector('.title').textContent = cleanTitle(hit.terminal_title_stripped) || hit.agent;
-      card.querySelector('.state').textContent = hit.agent_status;
-    }
-    if (current && current.pane_id === paneId) {
-      // herdr replays recent revisions on each tick; ignore stale ones.
-      if (typeof revision === 'number' && revision <= lastEventRev) return;
-      const statusChanged = current.agent_status !== hit.agent_status;
-      current = hit;
-      updateDetailHeader();
-      if (typeof revision === 'number' || statusChanged) scheduleOutput(revision);
-    }
+  // Apply an authoritative overview snapshot (from reads, not events).
+  // Coalesced so a burst can't repaint the list repeatedly.
+  let snapshotTimer = null;
+  function applySnapshot(snapshot) {
+    overview = snapshot;
+    clearTimeout(snapshotTimer);
+    snapshotTimer = setTimeout(() => {
+      render();
+      if (current) {
+        const fresh = findAgent(current.terminal_id);
+        if (fresh) { current = fresh; updateDetailHeader(); }
+      }
+    }, 500);
   }
 
   function startSSE() {
     // Wire event names use underscores (pane_updated), not the dotted subscription types.
     const url = '/api/events' + (token ? '?token=' + encodeURIComponent(token) : '');
     es = new EventSource(url);
-    es.addEventListener('pane_agent_status_changed', (ev) => {
-      const d = JSON.parse(ev.data);
-      patchAgent(d.pane_id, { agent_status: d.agent_status, title: d.title });
-    });
+    // Card status comes only from these authoritative snapshots.
+    es.addEventListener('overview', (ev) => applySnapshot(JSON.parse(ev.data)));
+    // pane_updated is now only an output-refresh hint for the open agent.
     es.addEventListener('pane_updated', (ev) => {
       const p = JSON.parse(ev.data).pane;
-      if (p) patchAgent(p.pane_id, { agent_status: p.agent_status, title: p.terminal_title_stripped, revision: p.revision });
+      if (p && current && current.pane_id === p.pane_id) scheduleOutput(p.revision);
     });
-    // Upstream resubscribed: revision numbering may restart, so resync.
     es.addEventListener('connected', () => {
       if (current) { lastEventRev = -1; scheduleOutput(); }
     });
-    ['workspace_updated', 'workspace_created', 'workspace_closed', 'workspace_renamed',
-     'tab_renamed', 'tab_created', 'tab_closed',
-     'pane_created', 'pane_closed', 'pane_exited', 'pane_agent_detected',
-    ].forEach((name) => es.addEventListener(name, queueRefetch));
     es.onopen = () => { setConn('live'); stopPolling(); queueRefetch(); };
     es.onerror = () => { setConn('poll'); startPolling(); };
   }
