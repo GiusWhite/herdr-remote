@@ -5,6 +5,15 @@ agent sessions running on this Mac. No framework, no build step, zero npm
 dependencies — plain `node:http` + `node:net` bridging HTTP/SSE to herdr's
 Unix-socket JSON API.
 
+## Deployment
+
+Runs as a persistent background service on this Mac (launchd, see
+`launchd/`), not something started by hand day to day. Reachable at
+**https://herdr.giuswhite.eu:4270** — a hostname that only resolves inside
+the home network (split-horizon DNS; the public `giuswhite.eu` domain points
+elsewhere). By design it's never exposed to the internet: reachable only
+from the home LAN, or remotely over VPN back into that network.
+
 ## Start
 
 ```sh
