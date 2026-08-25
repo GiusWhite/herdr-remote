@@ -330,30 +330,53 @@
   const cleanTitle = (t) => (t || '').replace(/^[^\p{L}\p{N}]+\s*/u, '');
 
   // ---- Home rendering ----
+  // Most recently active first; sessions with no known activity keep their
+  // herdr order at the end (Array#sort is stable).
+  function byRecency(agents) {
+    return [...agents].sort((x, y) => {
+      const a = typeof x.last_activity_at === 'number' ? x.last_activity_at : null;
+      const b = typeof y.last_activity_at === 'number' ? y.last_activity_at : null;
+      if (a === b) return 0;
+      if (a === null) return 1;
+      if (b === null) return -1;
+      return b - a;
+    });
+  }
+
+  let renderedSig = null;
   function render() {
     const root = $('workspaces');
+    const sections = overview.workspaces.map((ws) => ({ ws, agents: byRecency(ws.agents) }));
+    // Timestamps tick constantly; only touch the DOM when something visible moved.
+    // Compare what is actually displayed: raw titles carry a spinner glyph
+    // that changes on every tick but is stripped before rendering.
+    const sig = JSON.stringify(sections.map(({ ws, agents }) =>
+      [ws.workspace_id, ws.label, agents.map((a) =>
+        [a.terminal_id, a.agent_status, cleanTitle(a.terminal_title_stripped) || a.agent, a.agent, basename(a.cwd)])]));
+    if (sig === renderedSig) return;
+    renderedSig = sig;
     root.replaceChildren();
     if (!overview.workspaces.length) {
       root.innerHTML = '<p class="note">No workspaces. Is the herdr server running?</p>';
       return;
     }
-    for (const ws of overview.workspaces) {
+    for (const { ws, agents } of sections) {
       const sec = document.createElement('section');
       sec.className = 'ws';
       const h = document.createElement('h2');
       h.textContent = ws.label || ('Workspace ' + ws.number);
       const c = document.createElement('span');
       c.className = 'count';
-      c.textContent = ws.agents.length === 1 ? '1 agent' : ws.agents.length + ' agents';
+      c.textContent = agents.length === 1 ? '1 agent' : agents.length + ' agents';
       h.appendChild(c);
       sec.appendChild(h);
-      if (!ws.agents.length) {
+      if (!agents.length) {
         const p = document.createElement('p');
         p.className = 'empty-ws';
         p.textContent = 'No agents in this workspace.';
         sec.appendChild(p);
       }
-      for (const a of ws.agents) sec.appendChild(agentCard(a));
+      for (const a of agents) sec.appendChild(agentCard(a));
       root.appendChild(sec);
     }
   }

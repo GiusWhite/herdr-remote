@@ -35,7 +35,7 @@ once and stores it in localStorage; all `/api` routes require it
 | Route | Maps to |
 |---|---|
 | `GET /api/health` | `ping` |
-| `GET /api/overview` | `workspace.list` + `agent.list`, agents grouped per workspace |
+| `GET /api/overview` | `workspace.list` + `agent.list`, agents grouped per workspace, each with a derived `last_activity_at` (epoch ms, or null) |
 | `GET /api/agents/:terminalId/output?lines=300&source=recent&format=text` | `agent.read` |
 | `GET /api/agents/:terminalId/stream` | per-pane live SSE: `agent.read` loop every 350ms, pushes `output` events with the full text only when it changed; max 4 concurrent streams (429 beyond) |
 | `POST /api/agents/:terminalId/send` body `{text}` | `agent.send` |
@@ -50,6 +50,30 @@ Hash-based, so deep links and refresh work without server routing:
 - `#/agent/<terminal_id>` — agent detail view. Directly loadable/bookmarkable;
   if the terminal no longer exists the UI shows a "session not found" state
   with a link home. Browser back returns to the list.
+
+## Card ordering (most recently used first)
+
+Within each workspace section, agent cards are sorted by last activity,
+newest first; sessions with no recorded activity keep their herdr order at the
+end. Workspace section order is unchanged.
+
+herdr exposes no timestamps, so recency is derived here: each `agent.list`
+poll compares every pane's `revision` counter with its previous value, and an
+increase stamps `last_activity_at` (epoch ms) for that `terminal_id`. Sending
+text or keys from the UI stamps it too. `revision` is a per-pane counter and
+is only ever compared against that same pane's last value, never across panes.
+Polling continues at a slow 10s tick when no client is connected, so ordering
+is already right when the page opens. The counter advances when a pane emits
+output, so ordering granularity is coarse (seconds), which is all "last used"
+needs.
+
+State lives in `~/.local/state/herdr-web/activity.json` (honours
+`XDG_STATE_HOME`), created lazily and written at most every 30s when dirty. It
+stores only `{terminal_id: {t: last_activity_at, r: last_revision}}`. A
+missing or corrupt file is ignored, and entries are pruned once the terminal
+is gone and either never active or untouched for 30 days. On first ever run
+everything is "unknown", so the list looks exactly as before and sorts itself
+as sessions produce output.
 
 ## Agent status (home list)
 

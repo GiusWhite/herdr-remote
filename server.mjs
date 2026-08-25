@@ -11,6 +11,11 @@ import { randomUUID } from 'node:crypto';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const FALLBACK_SOCKET = `${process.env.HOME}/.config/herdr/herdr.sock`;
+const STATE_DIR = path.join(
+  process.env.XDG_STATE_HOME || path.join(process.env.HOME, '.local', 'state'),
+  'herdr-web',
+);
+const ACTIVITY_FILE = path.join(STATE_DIR, 'activity.json');
 
 // ---- CLI args ----
 const args = process.argv.slice(2);
@@ -162,6 +167,105 @@ function connectEvents() {
   sock.on('close', retry);
 }
 
+// ---- Activity tracking (recency ordering) ----
+// herdr exposes no timestamps, so recency is derived here: a pane's revision
+// counter advancing means it produced output. Revisions are per-pane counters
+// and are never compared across panes — only against that pane's last value.
+const ACTIVITY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const ACTIVITY_SAVE_MS = 30000;
+const activity = new Map();       // terminal_id -> { t: last_activity_at|null, r: revision }
+const paneToTerminal = new Map(); // pane_id -> terminal_id (panes move, terminals don't)
+let activityDirty = false;
+let activitySaveTimer = null;
+
+function loadActivity() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(ACTIVITY_FILE, 'utf8'));
+    for (const [id, e] of Object.entries(raw)) {
+      if (e && typeof e === 'object') activity.set(id, { t: e.t ?? null, r: e.r ?? null });
+    }
+  } catch { /* missing or corrupt state is not an error */ }
+}
+
+// Written synchronously: the file is tiny, and the exit handler must not race
+// an async write. Via a temp file so a crash mid-write can't truncate it.
+function saveActivity() {
+  if (activitySaveTimer) { clearTimeout(activitySaveTimer); activitySaveTimer = null; }
+  if (!activityDirty) return;
+  activityDirty = false;
+  const out = {};
+  for (const [id, e] of activity) out[id] = e;
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    const tmp = `${ACTIVITY_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(out));
+    fs.renameSync(tmp, ACTIVITY_FILE);
+  } catch { /* state is best-effort */ }
+}
+
+function markActivityDirty() {
+  activityDirty = true;
+  if (!activitySaveTimer) activitySaveTimer = setTimeout(saveActivity, ACTIVITY_SAVE_MS);
+}
+
+// An explicit interaction counts as use, even without new output.
+function touchActivity(terminalId) {
+  if (!terminalId) return;
+  const e = activity.get(terminalId) || { t: null, r: null };
+  e.t = Date.now();
+  activity.set(terminalId, e);
+  markActivityDirty();
+}
+
+function touchActivityByPane(paneId) {
+  touchActivity(paneToTerminal.get(paneId));
+}
+
+function recordActivity(agents) {
+  const now = Date.now();
+  for (const a of agents) {
+    if (!a.terminal_id) continue;
+    paneToTerminal.set(a.pane_id, a.terminal_id);
+    const prev = activity.get(a.terminal_id);
+    if (!prev) {
+      // First sight: remember the revision, but claim no activity time yet.
+      activity.set(a.terminal_id, { t: null, r: a.revision ?? null });
+      markActivityDirty();
+      continue;
+    }
+    if (typeof a.revision === 'number' && prev.r !== null && a.revision > prev.r) {
+      prev.t = now;
+      markActivityDirty();
+    }
+    if (typeof a.revision === 'number' && prev.r !== a.revision) {
+      prev.r = a.revision;
+      markActivityDirty();
+    }
+  }
+  pruneActivity(new Set(agents.map((a) => a.terminal_id)));
+}
+
+function pruneActivity(liveIds) {
+  const now = Date.now();
+  for (const [id, e] of activity) {
+    if (liveIds.has(id)) continue;
+    // Gone and either long idle or never active: nothing left to remember.
+    if (e.t === null || now - e.t > ACTIVITY_TTL_MS) {
+      activity.delete(id);
+      markActivityDirty();
+    }
+  }
+}
+
+// Keep timestamps current even with nobody watching, so ordering is right
+// the moment someone opens the page.
+async function refreshActivity() {
+  try {
+    const { agents = [] } = await rpc('agent.list');
+    recordActivity(agents);
+  } catch { /* transient */ }
+}
+
 // ---- Authoritative overview snapshots ----
 // Events are unreliable hints: they never fire for panes in unfocused
 // workspaces, and status flips on replay. Reads are always current, so while
@@ -172,10 +276,12 @@ let lastOverviewJSON = null;
 
 async function buildOverview() {
   const [ws, ag] = await Promise.all([rpc('workspace.list'), rpc('agent.list')]);
+  const agents = ag.agents || [];
+  recordActivity(agents);
   const byWorkspace = new Map();
-  for (const a of ag.agents || []) {
+  for (const a of agents) {
     if (!byWorkspace.has(a.workspace_id)) byWorkspace.set(a.workspace_id, []);
-    byWorkspace.get(a.workspace_id).push(a);
+    byWorkspace.get(a.workspace_id).push({ ...a, last_activity_at: activity.get(a.terminal_id)?.t ?? null });
   }
   return {
     workspaces: (ws.workspaces || []).map((w) => ({
@@ -342,6 +448,7 @@ async function handleApi(req, res, url) {
       const { text } = await readBody(req);
       if (typeof text !== 'string' || !text.length) return sendJSON(res, 400, { error: 'text required' });
       const result = await rpc('agent.send', { target: parts[2], text });
+      touchActivity(parts[2]);
       return sendJSON(res, 200, result ?? { ok: true });
     }
 
@@ -352,6 +459,7 @@ async function handleApi(req, res, url) {
         return sendJSON(res, 400, { error: 'keys must be a non-empty string array' });
       }
       const result = await rpc('pane.send_keys', { pane_id: parts[2], keys: list });
+      touchActivityByPane(parts[2]);
       return sendJSON(res, 200, result ?? { ok: true });
     }
 
@@ -386,8 +494,15 @@ const server = http.createServer((req, res) => {
   serveStatic(res, url.pathname);
 });
 
+const IDLE_ACTIVITY_POLL_MS = 10000;
+
 await discoverSocket();
+loadActivity();
 connectEvents();
+refreshActivity();
+// Slow always-on tick: keeps recency current when no client is watching.
+setInterval(() => { if (!sseClients.size) refreshActivity(); }, IDLE_ACTIVITY_POLL_MS);
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { saveActivity(); process.exit(0); });
 server.listen(PORT, HOST, () => {
   console.log(`herdr-web on http://${HOST}:${PORT} (socket: ${socketPath}${TOKEN ? ', token required' : ''})`);
 });
