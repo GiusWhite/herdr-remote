@@ -155,6 +155,15 @@ as an output-refresh hint for the open detail view.
   follow herdr's keybinding convention (`enter`, `esc`, `ctrl+c`, `tab`,
   `up`, …).
 
+## Composer
+
+The send field is an auto-growing textarea: it expands with the typed text up
+to 40vh, then scrolls. Enter submits and Shift+Enter inserts a newline on
+pointer devices; on touch (no Shift key) Enter always inserts a newline and
+the send button submits. Cmd/Ctrl+Enter submits anywhere. Multi-line text is
+pasted by `agent.send` in one go and then submitted with a single `enter`
+key; in keystroke mode a newline is sent as the `enter` key.
+
 ## Keystroke mode (interactive prompts)
 
 `agent.send` pastes text, which interactive TUI prompts ignore (Claude Code's

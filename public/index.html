@@ -197,16 +197,18 @@
     border: 1px solid rgba(255,255,255,.12);
   }
   #composer .keys button:active { background: rgba(255,255,255,.18); }
-  #composer form { display: flex; gap: 8px; }
-  #composer input {
-    flex: 1; min-width: 0; height: 44px;
-    padding: 0 14px; border-radius: 11px;
-    font: 14px ui-monospace, "SF Mono", Menlo, monospace;
+  #composer form { display: flex; gap: 8px; align-items: flex-end; }
+  #composer textarea {
+    flex: 1; min-width: 0;
+    height: 44px; min-height: 44px; max-height: 40vh;
+    padding: 11px 14px; border-radius: 11px;
+    font: 14px/20px ui-monospace, "SF Mono", Menlo, monospace;
     color: var(--term-fg);
     background: rgba(255,255,255,.07);
     border: 1px solid rgba(255,255,255,.14);
+    resize: none; overflow-y: auto;
   }
-  #composer input::placeholder { color: rgba(214,214,220,.4); }
+  #composer textarea::placeholder { color: rgba(214,214,220,.4); }
   #composer .send {
     flex: none; width: 44px; height: 44px; border-radius: 11px;
     display: inline-flex; align-items: center; justify-content: center;
@@ -221,7 +223,7 @@
     border: 1px solid rgba(255,255,255,.14);
   }
   #composer .keymode[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
-  #composer.keymode-on input { border-color: var(--accent); }
+  #composer.keymode-on textarea { border-color: var(--accent); }
   #composer .send svg { width: 18px; height: 18px; stroke: currentColor; }
 
   #toast {
@@ -273,7 +275,7 @@
     </div>
     <form id="sendForm">
       <button class="keymode" type="button" id="keyModeBtn" aria-pressed="false" aria-label="Toggle keystroke mode" title="Send input as keystrokes">⌨</button>
-      <input id="sendInput" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Send text to agent…" aria-label="Text to send">
+      <textarea id="sendInput" rows="1" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Send text to agent…" aria-label="Text to send"></textarea>
       <button class="send" type="submit" aria-label="Send">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
       </button>
@@ -581,6 +583,25 @@
     });
   }
 
+  // Composer grows with its content up to the CSS max-height, then scrolls.
+  function autosize() {
+    const ta = $('sendInput');
+    ta.style.height = 'auto';
+    ta.style.height = Math.max(44, ta.scrollHeight + 2) + 'px'; // +2: border-box borders
+  }
+  $('sendInput').addEventListener('input', autosize);
+
+  // Enter submits on pointer devices, Shift+Enter breaks the line; on touch
+  // there is no Shift, so Enter always breaks and the send button submits.
+  const enterSubmits = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+  $('sendInput').addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter' || ev.isComposing) return;
+    if ((ev.metaKey || ev.ctrlKey) || (enterSubmits && !ev.shiftKey && !ev.altKey)) {
+      ev.preventDefault();
+      $('sendForm').requestSubmit();
+    }
+  });
+
   // Keystroke mode: agent.send pastes, which interactive prompts (model
   // picker, y/n, numbered menus) ignore; pane.send_keys delivers real keys.
   let keyMode = false;
@@ -603,7 +624,7 @@
     try {
       if (keyMode) {
         // No auto-Enter here: the user presses the Enter key button when ready.
-        await sendKeys([...text].map((c) => (c === ' ' ? 'space' : c)));
+        await sendKeys([...text].map((c) => (c === ' ' ? 'space' : c === '\n' ? 'enter' : c)));
       } else {
         await api('/api/agents/' + encodeURIComponent(current.terminal_id) + '/send', {
           method: 'POST',
@@ -615,6 +636,7 @@
         await sendKeys(['enter']);
       }
       input.value = '';
+      autosize();
       setTimeout(loadOutput, 400);
     } catch (e) {
       toast('Send failed: ' + e.message);
