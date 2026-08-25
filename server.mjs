@@ -461,7 +461,10 @@ function serveStatic(res, urlPath) {
   if (!file.startsWith(PUBLIC_DIR)) return sendJSON(res, 403, { error: 'forbidden' });
   fs.readFile(file, (err, data) => {
     if (err) return sendJSON(res, 404, { error: 'not found' });
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
+    const headers = { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' };
+    // Always revalidate the service worker so a new SW_VERSION is picked up promptly.
+    if (rel === 'sw.js') headers['Cache-Control'] = 'no-cache';
+    res.writeHead(200, headers);
     res.end(data);
   });
 }

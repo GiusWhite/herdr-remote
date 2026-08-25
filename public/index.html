@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>herdr</title>
+<meta name="theme-color" content="#131312">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="herdr">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>
   :root {
     --bg: #f4f3f0;
@@ -73,6 +79,7 @@
   #conn .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--idle); }
   #conn.live .dot { background: var(--done); }
   #conn.poll .dot { background: var(--working); }
+  #conn.offline .dot { background: var(--blocked); }
 
   section.ws { margin-bottom: 26px; }
   section.ws h2 {
@@ -420,6 +427,12 @@
         if (fresh) { current = fresh; updateDetailHeader(); }
       }
     } catch (e) {
+      // fetch() throws a TypeError when the network itself is down (offline PWA shell).
+      if (e instanceof TypeError || navigator.onLine === false) {
+        setConn('offline');
+        $('workspaces').innerHTML = '<p class="note">Offline — cannot reach herdr-web.</p>';
+        return;
+      }
       $('workspaces').innerHTML = '<p class="note">Cannot reach herdr: ' + e.message + '</p>';
     }
   }
@@ -661,7 +674,7 @@
   function setConn(mode) {
     const el = $('conn');
     el.className = mode;
-    $('connLabel').textContent = mode === 'live' ? 'live' : mode === 'poll' ? 'polling' : 'connecting';
+    $('connLabel').textContent = mode === 'live' ? 'live' : mode === 'poll' ? 'polling' : mode === 'offline' ? 'offline' : 'connecting';
   }
 
   function queueRefetch() {
@@ -699,7 +712,7 @@
       if (current) { lastEventRev = -1; scheduleOutput(); }
     });
     es.onopen = () => { setConn('live'); stopPolling(); queueRefetch(); };
-    es.onerror = () => { setConn('poll'); startPolling(); };
+    es.onerror = () => { setConn(navigator.onLine === false ? 'offline' : 'poll'); startPolling(); };
   }
 
   function startPolling() {
@@ -727,6 +740,22 @@
 
   loadOverview().then(route);
   startSSE();
+
+  // ---- PWA: offline static shell ----
+  if ('serviceWorker' in navigator) {
+    const notifyUpdate = () => toast('Updated — reload');
+    navigator.serviceWorker.register('/sw.js').then((reg) => {
+      if (reg.waiting && navigator.serviceWorker.controller) notifyUpdate();
+      reg.addEventListener('updatefound', () => {
+        const w = reg.installing;
+        if (!w) return;
+        w.addEventListener('statechange', () => {
+          if (w.state === 'installed' && navigator.serviceWorker.controller) notifyUpdate();
+        });
+      });
+    }).catch(() => { /* no https or unsupported: app works without it */ });
+    navigator.serviceWorker.addEventListener('controllerchange', notifyUpdate);
+  }
 })();
 </script>
 </body>

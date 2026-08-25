@@ -55,6 +55,30 @@ iOS only allows PWA installation and Notifications on a trusted origin, so
 AirDrop/email `cert.pem` to the phone, install the profile, then enable it
 under Settings → General → About → Certificate Trust Settings.
 
+## Install as an app (PWA)
+
+herdr-web ships a web manifest and a small service worker, so it can be added
+to the home screen and opened as a standalone app.
+
+- **iOS Safari**: open the site, tap Share → *Add to Home Screen*.
+- **Android Chrome**: open the site, tap ⋮ → *Add to Home screen* (or *Install
+  app* when Chrome offers it).
+
+Install and the service worker both require a secure origin: `https://` (see
+[Optional TLS](#optional-tls) — the certificate must be trusted on the phone)
+or `http://localhost` on the Mac itself. Over plain `http://<lan-ip>` the app
+still works in the browser but is not installable and nothing is cached.
+
+What the service worker does: precaches the static shell only (`/`,
+`/index.html`, the manifest and the icons) under a versioned cache
+(`SW_VERSION` in `public/sw.js`), serves it cache-first with network fallback,
+and drops old caches on activate. It **never** touches `/api/*` — overview,
+output, send/keys and the SSE streams always go straight to the network, so
+nothing live is ever served stale. Offline, the shell opens and the connection
+indicator shows "offline". `sw.js` is served with `Cache-Control: no-cache` so
+a bumped `SW_VERSION` is picked up on the next visit; the UI then shows an
+"Updated — reload" toast.
+
 ## HTTP API
 
 | Route | Maps to |
