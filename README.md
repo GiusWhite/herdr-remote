@@ -109,6 +109,24 @@ Hash-based, so deep links and refresh work without server routing:
   follow herdr's keybinding convention (`enter`, `esc`, `ctrl+c`, `tab`,
   `up`, …).
 
+## Keystroke mode (interactive prompts)
+
+`agent.send` pastes text, which interactive TUI prompts ignore (Claude Code's
+`/model` picker, y/n questions, numbered menus, permission dialogs treat a
+pasted "5" as composer text). The composer therefore offers:
+
+- A key row: Enter, Esc, Ctrl+C, ↑ ↓ ← →, Tab, Shift+Tab (scrolls
+  horizontally on narrow screens).
+- A ⌨ toggle: when on, the submitted input is sent as real keystrokes via
+  `pane.send_keys` — one key per character (`" "` → `space`), with **no
+  auto-Enter** (press the Enter button when ready). Off by default, remembered
+  in memory for the page session only.
+
+Key names accepted by `pane.send_keys` (verified): single characters (`4`,
+`s`, `y`, `n`, …), `up`, `down`, `left`, `right`, `tab`, `shift+tab`,
+`space`, `backspace`, `enter`, `esc`, `ctrl+c`. Not supported: `pageup`,
+`home`. Invalid names return `{"code":"invalid_key"}`.
+
 ## Verified send behavior
 
 Exercised against a throwaway Claude session:

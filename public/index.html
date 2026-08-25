@@ -184,9 +184,13 @@
     background: color-mix(in srgb, var(--term-bg) 88%, white);
     border-top: 1px solid rgba(255,255,255,.08);
   }
-  #composer .keys { display: flex; gap: 8px; padding-bottom: 8px; }
+  #composer .keys {
+    display: flex; gap: 8px; padding-bottom: 8px;
+    overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  }
+  #composer .keys::-webkit-scrollbar { display: none; }
   #composer .keys button {
-    height: 34px; padding: 0 14px; border-radius: 8px;
+    flex: none; height: 34px; padding: 0 14px; border-radius: 8px;
     font: 12px/1 ui-monospace, "SF Mono", Menlo, monospace;
     color: var(--term-fg);
     background: rgba(255,255,255,.08);
@@ -209,6 +213,15 @@
     background: var(--accent); color: #fff;
   }
   #composer .send:disabled { opacity: .45; }
+  #composer .keymode {
+    flex: none; width: 44px; height: 44px; border-radius: 11px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 20px; line-height: 1; color: var(--term-fg);
+    background: rgba(255,255,255,.07);
+    border: 1px solid rgba(255,255,255,.14);
+  }
+  #composer .keymode[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #composer.keymode-on input { border-color: var(--accent); }
   #composer .send svg { width: 18px; height: 18px; stroke: currentColor; }
 
   #toast {
@@ -251,9 +264,16 @@
       <button type="button" data-key="enter">Enter</button>
       <button type="button" data-key="esc">Esc</button>
       <button type="button" data-key="ctrl+c">Ctrl+C</button>
+      <button type="button" data-key="up" aria-label="Up">↑</button>
+      <button type="button" data-key="down" aria-label="Down">↓</button>
+      <button type="button" data-key="left" aria-label="Left">←</button>
+      <button type="button" data-key="right" aria-label="Right">→</button>
+      <button type="button" data-key="tab">Tab</button>
+      <button type="button" data-key="shift+tab">Shift+Tab</button>
     </div>
     <form id="sendForm">
-      <input id="sendInput" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Send text to agent…" aria-label="Text to send">
+      <button class="keymode" type="button" id="keyModeBtn" aria-pressed="false" aria-label="Toggle keystroke mode" title="Send input as keystrokes">⌨</button>
+      <input id="sendInput" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Send text to agent…" aria-label="Text to send">
       <button class="send" type="submit" aria-label="Send">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
       </button>
@@ -530,6 +550,25 @@
     setPaneLive(false);
   }
 
+  function sendKeys(keys) {
+    return api('/api/panes/' + encodeURIComponent(current.pane_id) + '/keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys }),
+    });
+  }
+
+  // Keystroke mode: agent.send pastes, which interactive prompts (model
+  // picker, y/n, numbered menus) ignore; pane.send_keys delivers real keys.
+  let keyMode = false;
+  $('keyModeBtn').addEventListener('click', () => {
+    keyMode = !keyMode;
+    $('keyModeBtn').setAttribute('aria-pressed', String(keyMode));
+    $('composer').classList.toggle('keymode-on', keyMode);
+    $('sendInput').placeholder = keyMode ? 'Keystrokes… (each char is a key)' : 'Send text to agent…';
+    $('sendInput').focus();
+  });
+
   $('sendForm').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     if (!current) return;
@@ -539,18 +578,19 @@
     const btn = ev.target.querySelector('.send');
     btn.disabled = true;
     try {
-      await api('/api/agents/' + encodeURIComponent(current.terminal_id) + '/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      });
-      // agent.send writes literal text without submitting; follow with Enter
-      await new Promise((r) => setTimeout(r, 300));
-      await api('/api/panes/' + encodeURIComponent(current.pane_id) + '/keys', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keys: ['enter'] }),
-      });
+      if (keyMode) {
+        // No auto-Enter here: the user presses the Enter key button when ready.
+        await sendKeys([...text].map((c) => (c === ' ' ? 'space' : c)));
+      } else {
+        await api('/api/agents/' + encodeURIComponent(current.terminal_id) + '/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        // agent.send writes literal text without submitting; follow with Enter
+        await new Promise((r) => setTimeout(r, 300));
+        await sendKeys(['enter']);
+      }
       input.value = '';
       setTimeout(loadOutput, 400);
     } catch (e) {
@@ -564,11 +604,7 @@
     b.addEventListener('click', async () => {
       if (!current) return;
       try {
-        await api('/api/panes/' + encodeURIComponent(current.pane_id) + '/keys', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ keys: [b.dataset.key] }),
-        });
+        await sendKeys([b.dataset.key]);
         setTimeout(loadOutput, 400);
       } catch (e) {
         toast('Key failed: ' + e.message);
