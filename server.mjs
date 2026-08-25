@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // herdr-web: local web UI bridging HTTP to the herdr Unix-socket JSON API.
 import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -16,6 +17,7 @@ const STATE_DIR = path.join(
   'herdr-web',
 );
 const ACTIVITY_FILE = path.join(STATE_DIR, 'activity.json');
+const AUDIT_FILE = path.join(STATE_DIR, 'audit.log');
 
 // ---- CLI args ----
 const args = process.argv.slice(2);
@@ -26,9 +28,15 @@ function argValue(name, def) {
 const PORT = Number(argValue('--port', 4270));
 const HOST = argValue('--host', '127.0.0.1');
 const TOKEN = argValue('--token', null);
+const TLS_CERT = argValue('--tls-cert', null);
+const TLS_KEY = argValue('--tls-key', null);
 
 if (!['127.0.0.1', 'localhost', '::1'].includes(HOST) && !TOKEN) {
   console.error(`Refusing to bind to ${HOST} without --token. Pass --token <secret> for LAN mode.`);
+  process.exit(1);
+}
+if (!!TLS_CERT !== !!TLS_KEY) {
+  console.error('--tls-cert and --tls-key must be given together.');
   process.exit(1);
 }
 
@@ -390,11 +398,52 @@ function readBody(req) {
   });
 }
 
+// ---- Auth, throttling, audit ----
+// Browsers can't set headers on EventSource, so only these routes take ?token=.
+const QUERY_TOKEN_ROUTES = /^\/api\/(events|agents\/[^/]+\/stream)$/;
+const AUTH_MAX_FAILURES = 5;
+const AUTH_WINDOW_MS = 60000;
+const authFailures = new Map(); // ip -> { count, first }
+
+function tokenMatches(candidate) {
+  if (typeof candidate !== 'string') return false;
+  const a = Buffer.from(candidate);
+  const b = Buffer.from(TOKEN);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 function authorized(req, url) {
   if (!TOKEN) return true;
   const header = req.headers.authorization || '';
-  if (header === `Bearer ${TOKEN}`) return true;
-  return url.searchParams.get('token') === TOKEN;
+  if (header.startsWith('Bearer ') && tokenMatches(header.slice(7))) return true;
+  if (QUERY_TOKEN_ROUTES.test(url.pathname)) return tokenMatches(url.searchParams.get('token'));
+  return false;
+}
+
+function pruneAuthFailures(now) {
+  for (const [ip, e] of authFailures) {
+    if (now - e.first > AUTH_WINDOW_MS) authFailures.delete(ip);
+  }
+}
+
+function isThrottled(ip) {
+  const now = Date.now();
+  pruneAuthFailures(now);
+  const e = authFailures.get(ip);
+  return !!e && e.count >= AUTH_MAX_FAILURES;
+}
+
+function recordAuthFailure(ip) {
+  const e = authFailures.get(ip);
+  if (e) e.count++;
+  else authFailures.set(ip, { count: 1, first: Date.now() });
+}
+
+// One JSON line per mutating call or auth failure; payload text is never logged.
+function audit(entry) {
+  fs.mkdir(STATE_DIR, { recursive: true }, () => {
+    fs.appendFile(AUDIT_FILE, JSON.stringify({ ts: new Date().toISOString(), ...entry }) + '\n', () => {});
+  });
 }
 
 const MIME = {
@@ -419,7 +468,19 @@ function serveStatic(res, urlPath) {
 
 // ---- Routes ----
 async function handleApi(req, res, url) {
-  if (!authorized(req, url)) return sendJSON(res, 401, { error: 'unauthorized' });
+  const ip = req.socket.remoteAddress || 'unknown';
+  if (TOKEN) {
+    if (isThrottled(ip)) {
+      res.setHeader('Retry-After', String(AUTH_WINDOW_MS / 1000));
+      return sendJSON(res, 429, { error: 'too many failed attempts' });
+    }
+    if (!authorized(req, url)) {
+      recordAuthFailure(ip);
+      audit({ ip, route: url.pathname, event: 'auth_failed' });
+      return sendJSON(res, 401, { error: 'unauthorized' });
+    }
+    authFailures.delete(ip);
+  }
   // decode segments: pane ids contain ':' which clients URL-encode
   const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent); // ['api', ...]
 
@@ -447,6 +508,7 @@ async function handleApi(req, res, url) {
     if (req.method === 'POST' && parts[1] === 'agents' && parts[3] === 'send') {
       const { text } = await readBody(req);
       if (typeof text !== 'string' || !text.length) return sendJSON(res, 400, { error: 'text required' });
+      audit({ ip, route: 'send', target: parts[2], bytes: Buffer.byteLength(text) });
       const result = await rpc('agent.send', { target: parts[2], text });
       touchActivity(parts[2]);
       return sendJSON(res, 200, result ?? { ok: true });
@@ -458,6 +520,7 @@ async function handleApi(req, res, url) {
       if (!list.length || !list.every((k) => typeof k === 'string' && k.length)) {
         return sendJSON(res, 400, { error: 'keys must be a non-empty string array' });
       }
+      audit({ ip, route: 'keys', target: parts[2], bytes: Buffer.byteLength(list.join(' ')) });
       const result = await rpc('pane.send_keys', { pane_id: parts[2], keys: list });
       touchActivityByPane(parts[2]);
       return sendJSON(res, 200, result ?? { ok: true });
@@ -487,12 +550,16 @@ async function handleApi(req, res, url) {
   }
 }
 
-const server = http.createServer((req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+const SCHEME = TLS_CERT ? 'https' : 'http';
+const onRequest = (req, res) => {
+  const url = new URL(req.url, `${SCHEME}://${req.headers.host || 'localhost'}`);
   if (url.pathname.startsWith('/api/')) return handleApi(req, res, url);
   if (req.method !== 'GET') return sendJSON(res, 405, { error: 'method not allowed' });
   serveStatic(res, url.pathname);
-});
+};
+const server = TLS_CERT
+  ? https.createServer({ cert: fs.readFileSync(TLS_CERT), key: fs.readFileSync(TLS_KEY) }, onRequest)
+  : http.createServer(onRequest);
 
 const IDLE_ACTIVITY_POLL_MS = 10000;
 
@@ -504,5 +571,5 @@ refreshActivity();
 setInterval(() => { if (!sseClients.size) refreshActivity(); }, IDLE_ACTIVITY_POLL_MS);
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { saveActivity(); process.exit(0); });
 server.listen(PORT, HOST, () => {
-  console.log(`herdr-web on http://${HOST}:${PORT} (socket: ${socketPath}${TOKEN ? ', token required' : ''})`);
+  console.log(`herdr-web on ${SCHEME}://${HOST}:${PORT} (socket: ${socketPath}${TOKEN ? ', token required' : ''})`);
 });

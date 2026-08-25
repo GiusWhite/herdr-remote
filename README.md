@@ -10,7 +10,7 @@ Unix-socket JSON API.
 ```sh
 npm start            # http://127.0.0.1:4270
 # or
-node server.mjs [--port 4270] [--host 127.0.0.1] [--token <secret>]
+node server.mjs [--port 4270] [--host 127.0.0.1] [--token <secret>] [--tls-cert cert.pem --tls-key key.pem]
 ```
 
 The server discovers the herdr socket at startup via
@@ -27,8 +27,33 @@ node server.mjs --host 0.0.0.0 --token my-secret
 ```
 
 Then open `http://<mac-lan-ip>:4270` on the phone. The UI prompts for the token
-once and stores it in localStorage; all `/api` routes require it
-(`Authorization: Bearer <token>` or `?token=<token>`).
+once and stores it in localStorage. Hardening applied when `--token` is set:
+
+- All `/api` routes require `Authorization: Bearer <token>`, compared in
+  constant time. `?token=` is accepted **only** on the two EventSource routes
+  (`GET /api/events`, `GET /api/agents/:id/stream`), where browsers cannot set
+  headers.
+- Per-IP throttling: 5 failed auths within 60s → `429 {error:"too many failed
+  attempts"}` with `Retry-After: 60` for that IP until the window expires. A
+  successful auth clears the counter.
+- Audit log at `~/.local/state/herdr-web/audit.log` (honours `XDG_STATE_HOME`):
+  one JSON line per `send`/`keys` call (`{ts, ip, route, target, bytes}` — the
+  payload length only, never its content) and per auth failure
+  (`{ts, ip, route, event:"auth_failed"}`). The token is never logged or
+  echoed in a response.
+
+### Optional TLS
+
+```sh
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj "/CN=herdr-web" \
+  -addext "subjectAltName=IP:<mac-lan-ip>" -keyout key.pem -out cert.pem
+node server.mjs --host 0.0.0.0 --token my-secret --tls-cert cert.pem --tls-key key.pem
+```
+
+Both flags are required together; the server then listens on `https://`.
+iOS only allows PWA installation and Notifications on a trusted origin, so
+AirDrop/email `cert.pem` to the phone, install the profile, then enable it
+under Settings → General → About → Certificate Trust Settings.
 
 ## HTTP API
 
