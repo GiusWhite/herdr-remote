@@ -80,6 +80,21 @@
   #conn.live .dot { background: var(--done); }
   #conn.poll .dot { background: var(--working); }
   #conn.offline .dot { background: var(--blocked); }
+  #attention {
+    display: none; align-items: center; gap: 5px;
+    font-size: 12px; font-weight: 600; color: var(--blocked);
+    padding: 2px 9px; border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--blocked) 45%, transparent);
+    background: color-mix(in srgb, var(--blocked) 10%, transparent);
+  }
+  #attention.show { display: inline-flex; }
+  #notifyBtn {
+    display: none; align-self: center; width: 32px; height: 32px; border-radius: 8px;
+    font-size: 17px; line-height: 1; opacity: .45;
+  }
+  #notifyBtn.available { display: inline-flex; align-items: center; justify-content: center; }
+  #notifyBtn[aria-pressed="true"] { opacity: 1; }
+  #notifyBtn.denied { opacity: .3; text-decoration: line-through; }
 
   section.ws { margin-bottom: 26px; }
   section.ws h2 {
@@ -103,6 +118,7 @@
     transition: transform .12s ease-out;
   }
   .agent:active { transform: scale(.985); }
+  .agent.blocked { border-left: 3px solid var(--blocked); }
   .status {
     flex: none; width: 11px; height: 11px; border-radius: 50%;
     background: var(--unknown);
@@ -250,6 +266,8 @@
   <header class="app">
     <h1>herdr</h1>
     <span id="conn"><span class="dot"></span><span id="connLabel">connecting</span></span>
+    <span id="attention" role="status"></span>
+    <button type="button" id="notifyBtn" aria-pressed="false" aria-label="Notifications" title="Notifications off">🔔</button>
   </header>
   <div id="workspaces"><p class="note">Loading…</p></div>
 </main>
@@ -339,10 +357,12 @@
   const cleanTitle = (t) => (t || '').replace(/^[^\p{L}\p{N}]+\s*/u, '');
 
   // ---- Home rendering ----
-  // Most recently active first; sessions with no known activity keep their
-  // herdr order at the end (Array#sort is stable).
+  // Blocked agents first, then most recently active; sessions with no known
+  // activity keep their herdr order at the end (Array#sort is stable).
   function byRecency(agents) {
     return [...agents].sort((x, y) => {
+      const xb = x.agent_status === 'blocked', yb = y.agent_status === 'blocked';
+      if (xb !== yb) return xb ? -1 : 1;
       const a = typeof x.last_activity_at === 'number' ? x.last_activity_at : null;
       const b = typeof y.last_activity_at === 'number' ? y.last_activity_at : null;
       if (a === b) return 0;
@@ -352,8 +372,18 @@
     });
   }
 
+  function renderAttention() {
+    let n = 0;
+    for (const ws of overview.workspaces) for (const a of ws.agents) if (a.agent_status === 'blocked') n++;
+    document.title = (n ? `(${n}) ` : '') + 'herdr';
+    const pill = $('attention');
+    pill.textContent = n === 1 ? '1 needs attention' : n + ' need attention';
+    pill.classList.toggle('show', n > 0);
+  }
+
   let renderedSig = null;
   function render() {
+    renderAttention();
     const root = $('workspaces');
     const sections = overview.workspaces.map((ws) => ({ ws, agents: byRecency(ws.agents) }));
     // Timestamps tick constantly; only touch the DOM when something visible moved.
@@ -392,7 +422,7 @@
 
   function agentCard(a) {
     const btn = document.createElement('button');
-    btn.className = 'agent';
+    btn.className = 'agent' + (a.agent_status === 'blocked' ? ' blocked' : '');
     btn.dataset.pane = a.pane_id;
     const dot = document.createElement('span');
     dot.className = 'status ' + (a.agent_status || 'unknown');
@@ -711,6 +741,7 @@
     es.addEventListener('connected', () => {
       if (current) { lastEventRev = -1; scheduleOutput(); }
     });
+    es.addEventListener('status_changed', (ev) => notifyStatusChange(JSON.parse(ev.data)));
     es.onopen = () => { setConn('live'); stopPolling(); queueRefetch(); };
     es.onerror = () => { setConn(navigator.onLine === false ? 'offline' : 'poll'); startPolling(); };
   }
@@ -740,6 +771,52 @@
 
   loadOverview().then(route);
   startSSE();
+
+  // ---- Browser notifications (agent needs attention) ----
+  const notifySupported = 'Notification' in window;
+  const NOTIFY_OFF_KEY = 'herdr_notify_off';
+
+  function notifyEnabled() {
+    return notifySupported && Notification.permission === 'granted' && !localStorage.getItem(NOTIFY_OFF_KEY);
+  }
+
+  function renderNotifyBtn() {
+    const b = $('notifyBtn');
+    if (!notifySupported) return;
+    b.classList.add('available');
+    const denied = Notification.permission === 'denied';
+    const on = notifyEnabled();
+    b.classList.toggle('denied', denied);
+    b.setAttribute('aria-pressed', String(on));
+    b.title = denied ? 'Notifications blocked by the browser' : on ? 'Notifications on' : 'Notifications off';
+  }
+
+  if (notifySupported) {
+    $('notifyBtn').addEventListener('click', async () => {
+      if (Notification.permission === 'denied') { toast('Notifications are blocked in browser settings'); return; }
+      if (notifyEnabled()) {
+        localStorage.setItem(NOTIFY_OFF_KEY, '1');
+      } else {
+        localStorage.removeItem(NOTIFY_OFF_KEY);
+        if (Notification.permission !== 'granted') {
+          const perm = await Notification.requestPermission();
+          if (perm !== 'granted') toast(perm === 'denied' ? 'Notifications blocked' : 'Notifications need https');
+        }
+      }
+      renderNotifyBtn();
+    });
+    renderNotifyBtn();
+  }
+
+  function notifyStatusChange(c) {
+    if (!notifyEnabled()) return;
+    // Skip when the user is already looking at this agent.
+    if (!document.hidden && current && current.terminal_id === c.terminal_id) return;
+    try {
+      const n = new Notification(c.name + ' · ' + c.to, { body: c.workspace, tag: c.terminal_id, icon: '/icon-192.png' });
+      n.onclick = () => { location.hash = '#/agent/' + encodeURIComponent(c.terminal_id); window.focus(); n.close(); };
+    } catch (e) { /* e.g. Android requires SW-backed notifications */ }
+  }
 
   // ---- PWA: offline static shell ----
   if ('serviceWorker' in navigator) {

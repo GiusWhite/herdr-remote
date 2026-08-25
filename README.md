@@ -10,7 +10,7 @@ Unix-socket JSON API.
 ```sh
 npm start            # http://127.0.0.1:4270
 # or
-node server.mjs [--port 4270] [--host 127.0.0.1] [--token <secret>] [--tls-cert cert.pem --tls-key key.pem]
+node server.mjs [--port 4270] [--host 127.0.0.1] [--token <secret>] [--tls-cert cert.pem --tls-key key.pem] [--notify]
 ```
 
 The server discovers the herdr socket at startup via
@@ -135,6 +135,40 @@ with no clients connected it polls nothing. The client renders the list from
 those snapshots (coalesced 500ms), so finished sessions hold a steady status
 and closed workspaces disappear on their own. `pane_updated` is kept purely
 as an output-refresh hint for the open detail view.
+
+## Notifications & attention
+
+When an agent transitions `working → blocked`, `working → idle`,
+`working → done` (herdr's completion status) or `unknown → blocked`, the
+server broadcasts a `status_changed` SSE event
+(`{terminal_id, pane_id, name, workspace, from, to, at}`) over `/api/events`.
+Transitions are detected by comparing consecutive **overview snapshot reads**
+(the same 2.5s poll that feeds the list), never from herdr events — events
+replay stale statuses on resubscribe and never fire for unfocused workspaces
+(see [Agent status](#agent-status-home-list)). Nothing is emitted the first
+time a terminal is seen, so a server restart is silent.
+
+- **Browser notifications**: the 🔔 button in the home header asks for
+  permission and toggles delivery; it is hidden when the browser has no
+  `Notification` API and shows as struck-through when permission was denied.
+  Only an explicit "off" is remembered (`herdr_notify_off` in localStorage).
+  A notification (`<name> · <status>`, body = workspace) is shown when the
+  tab is hidden or the affected agent is not the open detail view; clicking
+  it opens `#/agent/<id>`. Browsers only grant the permission on a secure
+  origin, so from a phone this needs `https://` — see
+  [Optional TLS](#optional-tls).
+- **`--notify`**: optional native fallback. On each `status_changed` the
+  server also calls herdr's `notification.show` (title `<name> · <status>`,
+  body = workspace, `sound: request` for blocked, `done` otherwise), which
+  surfaces on the Mac even with no browser open. Failures are logged and
+  ignored.
+- **Tab badge**: the document title becomes `(n) herdr` where `n` is the
+  number of agents currently `blocked` in the latest snapshot (derived from
+  the snapshot, not counted from events).
+- **Needs attention first**: within each workspace, `blocked` agents sort
+  before everyone else, then the usual recency order applies. Blocked cards
+  get a red left accent, and a "n need attention" pill appears in the home
+  header (hidden when 0).
 
 ## Live updates (detail view)
 

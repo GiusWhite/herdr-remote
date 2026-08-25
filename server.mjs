@@ -30,6 +30,7 @@ const HOST = argValue('--host', '127.0.0.1');
 const TOKEN = argValue('--token', null);
 const TLS_CERT = argValue('--tls-cert', null);
 const TLS_KEY = argValue('--tls-key', null);
+const NOTIFY = args.includes('--notify');
 
 if (!['127.0.0.1', 'localhost', '::1'].includes(HOST) && !TOKEN) {
   console.error(`Refusing to bind to ${HOST} without --token. Pass --token <secret> for LAN mode.`);
@@ -299,10 +300,51 @@ async function buildOverview() {
   };
 }
 
+// Attention transitions, derived from snapshot reads only (events replay stale
+// statuses). Mutates prevMap in place; nothing is emitted on first sight.
+const ATTENTION_TRANSITIONS = new Set(['working>blocked', 'working>idle', 'working>done', 'unknown>blocked']);
+
+function detectStatusChanges(prevMap, agents) {
+  const changes = [];
+  const live = new Set();
+  for (const a of agents) {
+    if (!a.terminal_id) continue;
+    live.add(a.terminal_id);
+    const to = a.agent_status || 'unknown';
+    const from = prevMap.get(a.terminal_id);
+    prevMap.set(a.terminal_id, to);
+    if (from === undefined || from === to) continue;
+    if (ATTENTION_TRANSITIONS.has(`${from}>${to}`)) changes.push({ agent: a, from, to });
+  }
+  for (const id of prevMap.keys()) if (!live.has(id)) prevMap.delete(id);
+  return changes;
+}
+
+const lastStatus = new Map(); // terminal_id -> last seen agent_status
+
+function nativeNotify(title, body, sound) {
+  rpc('notification.show', { title, body, sound })
+    .catch((e) => console.warn(`notification.show failed: ${e.message}`));
+}
+
+function emitStatusChanges(snapshot) {
+  const agents = snapshot.workspaces.flatMap((w) => w.agents);
+  const labels = new Map(snapshot.workspaces.map((w) => [w.workspace_id, w.label || `Workspace ${w.number}`]));
+  for (const { agent: a, from, to } of detectStatusChanges(lastStatus, agents)) {
+    const name = a.terminal_title_stripped || a.terminal_title || a.agent;
+    const workspace = labels.get(a.workspace_id) || a.workspace_id;
+    broadcast('status_changed', {
+      terminal_id: a.terminal_id, pane_id: a.pane_id, name, workspace, from, to, at: Date.now(),
+    });
+    if (NOTIFY) nativeNotify(`${name} · ${to}`, workspace, to === 'blocked' ? 'request' : 'done');
+  }
+}
+
 async function pollOverview() {
   if (!sseClients.size) return;
   try {
     const snapshot = await buildOverview();
+    emitStatusChanges(snapshot);
     const json = JSON.stringify(snapshot);
     if (json !== lastOverviewJSON) {
       lastOverviewJSON = json;
