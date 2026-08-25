@@ -86,7 +86,10 @@ a bumped `SW_VERSION` is picked up on the next visit; the UI then shows an
 | `GET /api/health` | `ping` |
 | `GET /api/overview` | `workspace.list` + `agent.list`, agents grouped per workspace, each with a derived `last_activity_at` (epoch ms, or null) |
 | `GET /api/agents/:terminalId/output?lines=300&source=recent&format=text` | `agent.read` |
-| `GET /api/agents/:terminalId/stream` | per-pane live SSE: `agent.read` loop every 350ms, pushes `output` events with the full text only when it changed; max 4 concurrent streams (429 beyond) |
+| `GET /api/agents/:terminalId/stream?format=text` | per-pane live SSE: `agent.read` loop every 350ms, pushes `output` events with the full text only when it changed; max 4 concurrent streams (429 beyond) |
+
+`format` is `text` (default) or `ansi` on both read routes; anything else is a
+400. With `ansi` the returned `text` carries the raw escape sequences.
 | `POST /api/agents/:terminalId/send` body `{text}` | `agent.send` |
 | `POST /api/panes/:paneId/keys` body `{keys: ["enter"]}` | `pane.send_keys` |
 | `GET /api/events` | SSE bridge over one long-lived `events.subscribe` connection, plus authoritative `overview` snapshots |
@@ -182,6 +185,26 @@ time a terminal is seen, so a server restart is silent.
   the global SSE is down too, 10s polling refreshes the open detail.
 - Auto-scroll to bottom only happens when already at/near the bottom, so
   reading scrollback is never interrupted.
+
+## Output rendering
+
+The detail view reads the pane with `format=ansi` and renders colors and text
+attributes itself — a small hand-written SGR parser in `index.html`, no
+library. The **Aa** button in the detail header toggles it (`aria-pressed`,
+default on, `herdr_ansi=0` in localStorage when off); switching reopens the
+live stream and refetches with the matching `format`, so the change is
+immediate. Off means exactly the old behavior: `format=text`, plain text.
+
+Supported SGR: reset (0), bold/dim/italic/underline/inverse/strikethrough
+(1/2/3/4/7/9) and their offs (22/23/24/27/29), the 16 base colors as fg/bg
+(30–37, 90–97, 40–47, 100–107, plus 39/49 defaults) via `--ansi-0`…`--ansi-15`
+CSS variables tuned to the dark pane, 256-color (`38;5;n` / `48;5;n`, xterm
+cube and grayscale computed) and truecolor (`38;2;r;g;b` / `48;2;r;g;b`) as
+inline styles. Inverse swaps fg/bg, falling back to the pane's own colors.
+Every other escape — cursor movement, erase, mode switches (`?…h/l`), OSC
+titles/hyperlinks, lone ESC — is stripped and ignored. Output is built from
+text nodes and `<span>`s (never innerHTML), in one pass, with same-styled runs
+coalesced into a single span.
 
 ## herdr protocol notes
 

@@ -374,7 +374,7 @@ const STREAM_POLL_MS = 350;
 let paneStreams = 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function handleAgentStream(req, res, terminalId) {
+async function handleAgentStream(req, res, terminalId, format) {
   if (paneStreams >= MAX_PANE_STREAMS) {
     return sendJSON(res, 429, { error: `too many live streams (max ${MAX_PANE_STREAMS})` });
   }
@@ -397,7 +397,7 @@ async function handleAgentStream(req, res, terminalId) {
   let lastWrite = Date.now();
   while (!closed) {
     try {
-      const result = await rpc('agent.read', { target: terminalId, source: 'recent', lines: 300, format: 'text' });
+      const result = await rpc('agent.read', { target: terminalId, source: 'recent', lines: 300, format });
       const text = (result?.read ?? result)?.text ?? '';
       if (text !== lastText) {
         lastText = text;
@@ -420,6 +420,8 @@ async function handleAgentStream(req, res, terminalId) {
 }
 
 // ---- HTTP helpers ----
+const READ_FORMATS = new Set(['text', 'ansi']);
+
 function sendJSON(res, status, body) {
   const data = JSON.stringify(body);
   res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -538,14 +540,12 @@ async function handleApi(req, res, url) {
       return sendJSON(res, 200, await buildOverview());
     }
 
-    if (req.method === 'GET' && parts[1] === 'agents' && parts[3] === 'stream') {
-      return handleAgentStream(req, res, parts[2]);
-    }
-
-    if (req.method === 'GET' && parts[1] === 'agents' && parts[3] === 'output') {
+    if (req.method === 'GET' && parts[1] === 'agents' && (parts[3] === 'stream' || parts[3] === 'output')) {
+      const format = url.searchParams.get('format') || 'text';
+      if (!READ_FORMATS.has(format)) return sendJSON(res, 400, { error: 'format must be text or ansi' });
+      if (parts[3] === 'stream') return handleAgentStream(req, res, parts[2], format);
       const lines = Number(url.searchParams.get('lines') || 300);
       const source = url.searchParams.get('source') || 'recent';
-      const format = url.searchParams.get('format') || 'text';
       const result = await rpc('agent.read', { target: parts[2], source, lines, format });
       return sendJSON(res, 200, result?.read ?? result); // unwrap {type:"pane_read", read:{...}}
     }

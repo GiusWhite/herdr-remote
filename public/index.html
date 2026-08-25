@@ -28,6 +28,11 @@
     --term-bg: #16161a;
     --term-fg: #d6d6dc;
     --shadow: 0 1px 3px rgba(28, 27, 24, .08), 0 4px 14px rgba(28, 27, 24, .06);
+    /* ANSI 16-color palette, tuned for the always-dark terminal pane */
+    --ansi-0: #3c3c44; --ansi-1: #f2777a; --ansi-2: #99cc99; --ansi-3: #ffcc66;
+    --ansi-4: #6699cc; --ansi-5: #cc99cc; --ansi-6: #66cccc; --ansi-7: #cfcfd6;
+    --ansi-8: #7a7a84; --ansi-9: #ff9a9e; --ansi-10: #b5e8b5; --ansi-11: #ffe0a3;
+    --ansi-12: #8fbce6; --ansi-13: #e0b3e0; --ansi-14: #9ee6e6; --ansi-15: #f4f4f8;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -187,6 +192,13 @@
   .iconbtn:active { background: rgba(255,255,255,.1); }
   .iconbtn svg { width: 20px; height: 20px; stroke: currentColor; }
   .iconbtn.spin svg { animation: spin .7s linear infinite; }
+  #ansiBtn { font-size: 15px; font-weight: 600; letter-spacing: -.02em; opacity: .45; }
+  #ansiBtn[aria-pressed="true"] {
+    opacity: 1;
+    background: linear-gradient(90deg, var(--ansi-1), var(--ansi-3), var(--ansi-2), var(--ansi-4), var(--ansi-5));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  #detail.notfound #ansiBtn { visibility: hidden; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
   #out {
@@ -199,6 +211,28 @@
     white-space: pre-wrap; word-break: break-word;
   }
   #out .placeholder { color: rgba(214,214,220,.45); font-size: 14px; padding: 24px 8px; text-align: center; }
+  #out .a-b { font-weight: 700; }
+  #out .a-d { opacity: .6; }
+  #out .a-i { font-style: italic; }
+  #out .a-u { text-decoration: underline; }
+  #out .a-s { text-decoration: line-through; }
+  #out .a-u.a-s { text-decoration: underline line-through; }
+  #out .af-0 { color: var(--ansi-0); } #out .ab-0 { background-color: var(--ansi-0); }
+  #out .af-1 { color: var(--ansi-1); } #out .ab-1 { background-color: var(--ansi-1); }
+  #out .af-2 { color: var(--ansi-2); } #out .ab-2 { background-color: var(--ansi-2); }
+  #out .af-3 { color: var(--ansi-3); } #out .ab-3 { background-color: var(--ansi-3); }
+  #out .af-4 { color: var(--ansi-4); } #out .ab-4 { background-color: var(--ansi-4); }
+  #out .af-5 { color: var(--ansi-5); } #out .ab-5 { background-color: var(--ansi-5); }
+  #out .af-6 { color: var(--ansi-6); } #out .ab-6 { background-color: var(--ansi-6); }
+  #out .af-7 { color: var(--ansi-7); } #out .ab-7 { background-color: var(--ansi-7); }
+  #out .af-8 { color: var(--ansi-8); } #out .ab-8 { background-color: var(--ansi-8); }
+  #out .af-9 { color: var(--ansi-9); } #out .ab-9 { background-color: var(--ansi-9); }
+  #out .af-10 { color: var(--ansi-10); } #out .ab-10 { background-color: var(--ansi-10); }
+  #out .af-11 { color: var(--ansi-11); } #out .ab-11 { background-color: var(--ansi-11); }
+  #out .af-12 { color: var(--ansi-12); } #out .ab-12 { background-color: var(--ansi-12); }
+  #out .af-13 { color: var(--ansi-13); } #out .ab-13 { background-color: var(--ansi-13); }
+  #out .af-14 { color: var(--ansi-14); } #out .ab-14 { background-color: var(--ansi-14); }
+  #out .af-15 { color: var(--ansi-15); } #out .ab-15 { background-color: var(--ansi-15); }
   #out .placeholder a { color: var(--accent); }
 
   #composer {
@@ -281,6 +315,7 @@
       <div class="t" id="dTitle"></div>
       <div class="s"><span class="status" id="dStatus"></span><span id="dSub"></span><span class="live">live</span></div>
     </div>
+    <button class="iconbtn" id="ansiBtn" aria-pressed="true" aria-label="Toggle ANSI colors" title="ANSI colors on">Aa</button>
     <button class="iconbtn" id="refreshBtn" aria-label="Refresh output">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg>
     </button>
@@ -537,12 +572,125 @@
     $('dSub').textContent = (current.agent_status || 'unknown') + ' · ' + (current.cwd || '');
   }
 
+  // ---- ANSI SGR -> DOM ----
+  // Matches CSI, OSC (BEL/ST terminated) and any other two-byte escape; only
+  // SGR (CSI ... m) is interpreted, everything else is dropped.
+  const ANSI_RE = /\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[\s\S]?/g;
+  const ANSI_DEFAULT = { bold: 0, dim: 0, italic: 0, underline: 0, inverse: 0, strike: 0, fg: null, bg: null };
+
+  // xterm 256 palette: 0-15 -> theme class index, 16-231 color cube, 232-255 grayscale.
+  function ansi256(n) {
+    if (n < 16) return n;
+    if (n >= 232) { const v = 8 + (n - 232) * 10; return `rgb(${v},${v},${v})`; }
+    n -= 16;
+    const c = (i) => (i ? 55 + i * 40 : 0);
+    return `rgb(${c(Math.floor(n / 36))},${c(Math.floor(n / 6) % 6)},${c(n % 6)})`;
+  }
+
+  function applySgr(params, st) {
+    const p = params.split(';').map((x) => (x === '' ? 0 : Number(x)));
+    for (let i = 0; i < p.length; i++) {
+      const n = p[i];
+      if (n === 0) Object.assign(st, ANSI_DEFAULT);
+      else if (n === 1) st.bold = 1;
+      else if (n === 2) st.dim = 1;
+      else if (n === 3) st.italic = 1;
+      else if (n === 4) st.underline = 1;
+      else if (n === 7) st.inverse = 1;
+      else if (n === 9) st.strike = 1;
+      else if (n === 22) st.bold = st.dim = 0;
+      else if (n === 23) st.italic = 0;
+      else if (n === 24) st.underline = 0;
+      else if (n === 27) st.inverse = 0;
+      else if (n === 29) st.strike = 0;
+      else if (n === 39) st.fg = null;
+      else if (n === 49) st.bg = null;
+      else if (n >= 30 && n <= 37) st.fg = n - 30;
+      else if (n >= 90 && n <= 97) st.fg = n - 82;
+      else if (n >= 40 && n <= 47) st.bg = n - 40;
+      else if (n >= 100 && n <= 107) st.bg = n - 92;
+      else if (n === 38 || n === 48) {
+        const k = n === 38 ? 'fg' : 'bg';
+        if (p[i + 1] === 5) { st[k] = ansi256(Math.min(255, p[i + 2] | 0)); i += 2; }
+        else if (p[i + 1] === 2) { st[k] = `rgb(${p[i + 2] | 0},${p[i + 3] | 0},${p[i + 4] | 0})`; i += 4; }
+      }
+    }
+  }
+
+  const sgrKey = (s) => `${s.bold}${s.dim}${s.italic}${s.underline}${s.inverse}${s.strike}|${s.fg}|${s.bg}`;
+  const SGR_PLAIN = sgrKey(ANSI_DEFAULT);
+
+  function sgrSpan(st, text) {
+    const span = document.createElement('span');
+    let fg = st.fg, bg = st.bg;
+    if (st.inverse) [fg, bg] = [bg ?? 'var(--term-bg)', fg ?? 'var(--term-fg)'];
+    let cls = '';
+    if (st.bold) cls += ' a-b';
+    if (st.dim) cls += ' a-d';
+    if (st.italic) cls += ' a-i';
+    if (st.underline) cls += ' a-u';
+    if (st.strike) cls += ' a-s';
+    if (typeof fg === 'number') cls += ' af-' + fg; else if (fg !== null) span.style.color = fg;
+    if (typeof bg === 'number') cls += ' ab-' + bg; else if (bg !== null) span.style.backgroundColor = bg;
+    if (cls) span.className = cls.slice(1);
+    span.textContent = text;
+    return span;
+  }
+
+  // One pass; consecutive text with the same style is coalesced into one node.
+  function renderAnsi(text) {
+    const frag = document.createDocumentFragment();
+    const st = Object.assign({}, ANSI_DEFAULT);
+    let cur = st, curKey = SGR_PLAIN, run = '', last = 0;
+    const flush = () => {
+      if (run) frag.appendChild(curKey === SGR_PLAIN ? document.createTextNode(run) : sgrSpan(cur, run));
+      run = '';
+    };
+    ANSI_RE.lastIndex = 0;
+    for (let m; (m = ANSI_RE.exec(text));) {
+      run += text.slice(last, m.index);
+      last = m.index + m[0].length;
+      const seq = m[0];
+      if (seq[1] !== '[' || seq[seq.length - 1] !== 'm' || seq.length < 3) continue;
+      const params = seq.slice(2, -1);
+      if (/[^0-9;]/.test(params)) continue; // private/intermediate bytes: not SGR
+      applySgr(params, st);
+      const key = sgrKey(st);
+      if (key === curKey) continue;
+      flush();
+      cur = Object.assign({}, st);
+      curKey = key;
+    }
+    run += text.slice(last);
+    flush();
+    return frag;
+  }
+
+  // ---- Output rendering (ANSI toggle) ----
+  const ANSI_KEY = 'herdr_ansi';
+  let ansiOn = localStorage.getItem(ANSI_KEY) !== '0';
+  const readFormat = () => (ansiOn ? 'ansi' : 'text');
+
+  function renderAnsiBtn() {
+    const b = $('ansiBtn');
+    b.setAttribute('aria-pressed', String(ansiOn));
+    b.title = ansiOn ? 'ANSI colors on' : 'ANSI colors off';
+  }
+  $('ansiBtn').addEventListener('click', () => {
+    ansiOn = !ansiOn;
+    localStorage.setItem(ANSI_KEY, ansiOn ? '1' : '0');
+    renderAnsiBtn();
+    if (current) { loadOutput(); openPaneStream(); } // refetch/reopen with the new format
+  });
+  renderAnsiBtn();
+
   // Render output text, keeping the user's place unless they're at the bottom.
   function renderOutput(text) {
-    text = (text || '').replace(/\s+$/, '');
+    text = (text || '').replace(/\r/g, '').replace(/(?:\s|\x1b\[[0-9;]*m)+$/, '');
     const out = $('out');
     const stick = out.scrollTop + out.clientHeight >= out.scrollHeight - 60;
-    $('outText').textContent = text;
+    if (ansiOn) $('outText').replaceChildren(renderAnsi(text));
+    else $('outText').textContent = text;
     out.querySelector('.placeholder')?.remove();
     if (!text) {
       const p = document.createElement('div');
@@ -561,8 +709,9 @@
     const btn = $('refreshBtn');
     btn.classList.add('spin');
     try {
-      const r = await api('/api/agents/' + encodeURIComponent(current.terminal_id) + '/output?lines=300&source=recent');
-      renderOutput(r.text ?? r.output ?? r.content ?? '');
+      const fmt = readFormat();
+      const r = await api('/api/agents/' + encodeURIComponent(current.terminal_id) + '/output?lines=300&source=recent&format=' + fmt);
+      if (fmt === readFormat()) renderOutput(r.text ?? r.output ?? r.content ?? '');
     } catch (e) {
       toast('Read failed: ' + e.message);
     } finally {
@@ -597,8 +746,8 @@
   function openPaneStream() {
     closePaneStream();
     if (!current) return;
-    const url = '/api/agents/' + encodeURIComponent(current.terminal_id) + '/stream'
-      + (token ? '?token=' + encodeURIComponent(token) : '');
+    const url = '/api/agents/' + encodeURIComponent(current.terminal_id) + '/stream?format=' + readFormat()
+      + (token ? '&token=' + encodeURIComponent(token) : '');
     paneEs = new EventSource(url);
     paneEs.onopen = () => setPaneLive(true);
     paneEs.addEventListener('output', (ev) => {
