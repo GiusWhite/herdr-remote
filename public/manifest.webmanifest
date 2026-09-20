@@ -3,7 +3,8 @@
   "short_name": "herdr",
   "start_url": "/",
   "scope": "/",
-  "display": "standalone",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
   "background_color": "#131312",
   "theme_color": "#131312",
   "icons": [

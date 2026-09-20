@@ -51,18 +51,39 @@ once and stores it in localStorage. Hardening applied when `--token` is set:
   (`{ts, ip, route, event:"auth_failed"}`). The token is never logged or
   echoed in a response.
 
-### Optional TLS
+### TLS
+
+`--tls-cert` and `--tls-key` are required together; the server then listens on
+`https://`. Both phones only allow PWA installation and Notifications on a
+*trusted* origin, so the cert must be publicly trusted — a self-signed one is
+not enough, and clicking through the browser warning does not make the origin
+secure (no service worker, no install).
+
+The cert is a real Let's Encrypt one, issued over the **DNS-01** challenge, so
+`herdr.giuswhite.eu` never needs to be reachable from the internet — only a TXT
+record in the public `giuswhite.eu` zone (hosted at Hostinger, which `lego`
+drives through its API).
+
+One-time setup:
 
 ```sh
-openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj "/CN=herdr-web" \
-  -addext "subjectAltName=IP:<mac-lan-ip>" -keyout key.pem -out cert.pem
-node server.mjs --host 0.0.0.0 --token my-secret --tls-cert cert.pem --tls-key key.pem
+brew install lego
+mkdir -p ~/.config/herdr-web
+cat > ~/.config/herdr-web/acme.env <<'ENV'
+HOSTINGER_API_TOKEN=<token from hPanel → Account → API>
+ACME_EMAIL=<contact address for expiry notices>
+ENV
+chmod 600 ~/.config/herdr-web/acme.env
+
+scripts/renew-tls.sh          # issues, installs, restarts the service
 ```
 
-Both flags are required together; the server then listens on `https://`.
-iOS only allows PWA installation and Notifications on a trusted origin, so
-AirDrop/email `cert.pem` to the phone, install the profile, then enable it
-under Settings → General → About → Certificate Trust Settings.
+`scripts/renew-tls.sh` is idempotent: it issues on first run, renews only
+inside 30 days of expiry, and copies the result to
+`~/.config/herdr-web/tls/{cert,key}.pem` + `launchctl kickstart -k` **only when
+the cert actually changed** (the server reads the pair at startup).
+`launchd/com.giuswhite.herdr-web-tls.plist` runs it daily at 03:40; log at
+`~/Library/Logs/herdr-web-tls.log`.
 
 ## Install as an app (PWA)
 
@@ -73,10 +94,20 @@ to the home screen and opened as a standalone app.
 - **Android Chrome**: open the site, tap ⋮ → *Add to Home screen* (or *Install
   app* when Chrome offers it).
 
-Install and the service worker both require a secure origin: `https://` (see
-[Optional TLS](#optional-tls) — the certificate must be trusted on the phone)
-or `http://localhost` on the Mac itself. Over plain `http://<lan-ip>` the app
-still works in the browser but is not installable and nothing is cached.
+Install and the service worker both require a secure origin: `https://` with a
+publicly trusted certificate (see [TLS](#tls)) or `http://localhost` on the Mac
+itself. Over plain `http://<lan-ip>`, or over `https://` with an untrusted cert,
+the app still works in the browser but is not installable and nothing is cached
+— Chrome then offers only *Add to Home screen*, which opens a normal browser tab
+with the full toolbar instead of the app.
+
+The manifest asks for `display: "fullscreen"` (falling back to `standalone` via
+`display_override`), so on Android the installed app has no status or navigation
+bar. iOS ignores `display` entirely: there a home-screen app is always
+standalone with the status bar drawn, and `apple-mobile-web-app-status-bar-style:
+black-translucent` + `viewport-fit=cover` + the `env(safe-area-inset-*)` padding
+is what makes it run edge-to-edge. Chrome reads `display` at install time only,
+so changing it means removing and re-adding the app.
 
 What the service worker does: precaches the static shell only (`/`,
 `/index.html`, the manifest and the icons) under a versioned cache
