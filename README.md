@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="herdr" width="300">
+</p>
+
 # herdr-web
 
 A mobile-first web UI for [herdr](https://herdr.dev) agent sessions running on a
