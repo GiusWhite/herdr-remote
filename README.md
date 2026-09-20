@@ -94,12 +94,19 @@ a bumped `SW_VERSION` is picked up on the next visit; the UI then shows an
 |---|---|
 | `GET /api/health` | `ping` |
 | `GET /api/overview` | `workspace.list` + `agent.list`, agents grouped per workspace, each with a derived `last_activity_at` (epoch ms, or null) |
-| `GET /api/agents/:terminalId/output?lines=300&source=recent&format=text` | `agent.read` |
-| `GET /api/agents/:terminalId/stream?format=text` | per-pane live SSE: `agent.read` loop every 350ms, pushes `output` events with the full text only when it changed; max 4 concurrent streams (429 beyond) |
+| `GET /api/agents/:terminalId/output?lines=1000&format=text` | `pane.read`, then the last `lines` of the stitched history (see [Scrollback history](#scrollback-history)): `{text, start, end, total, pane_id, revision}` |
+| `GET /api/agents/:terminalId/history?before=<idx>&lines=1000&format=text` | lines `[before-lines, before)` of the stitched history, no herdr read: `{text, start, end, total}` |
+| `GET /api/agents/:terminalId/stream?format=text` | per-pane live SSE: `pane.read` loop every 350ms, pushes `output` events `{text, start, total}` (the history tail) only when it changed; max 4 concurrent streams (429 beyond) |
+
+`:terminalId` is resolved server-side to the pane currently hosting that
+agent (index refreshed on every `agent.list` read; unknown ids → 404). herdr
+≥ 0.8 accepts only agent names or pane ids as `target`, never terminal ids,
+and `agent.send` was removed — text goes through `pane.send_text`. Reads ask
+for 1000 lines, the most `pane.read` will return (`truncated: true` above it).
 
 `format` is `text` (default) or `ansi` on both read routes; anything else is a
 400. With `ansi` the returned `text` carries the raw escape sequences.
-| `POST /api/agents/:terminalId/send` body `{text}` | `agent.send` |
+| `POST /api/agents/:terminalId/send` body `{text}` | `pane.send_text` |
 | `POST /api/panes/:paneId/keys` body `{keys: ["enter"]}` | `pane.send_keys` |
 | `GET /api/events` | SSE bridge over one long-lived `events.subscribe` connection, plus authoritative `overview` snapshots |
 
@@ -229,6 +236,53 @@ time a terminal is seen, so a server restart is silent.
 - Auto-scroll to bottom only happens when already at/near the bottom, so
   reading scrollback is never interrupted.
 
+## Scrollback history
+
+herdr's `pane.read` returns at most 1000 lines and has no offset parameter,
+whatever the pane's buffer holds (measured on 0.8.2: a pane with ~3000 rows of
+scrollback per `pane.get` still reads back exactly 1000; the cap is compiled
+in, `[advanced] scrollback_limit_bytes` only sizes the buffer). herdr-web
+therefore keeps its own per-pane history (`history.mjs`) and grows it from
+overlapping reads:
+
+- Every read the server makes — the 350ms `/stream` loop, `/output`, a
+  background pass over all agents whose `revision` moved since their last read
+  (piggybacking on the 2.5s / 10s `agent.list` polls), and a 500ms tick over
+  agents in `working` state — is ingested. Panes nobody has open still
+  accumulate history, at the poll granularity: a burst that outruns the
+  overlap between two reads leaves a dimmed `── history gap ──` marker where
+  the unread part was.
+- **Alternate-screen TUIs have no scrollback in herdr at all.** Claude Code
+  with `"tui": "fullscreen"` (its default for recent installs) draws on the
+  alternate screen; `pane.get` reports `max_offset_from_bottom: 0` and every
+  read returns just the viewport (~47 lines, `truncated: false`). The history
+  is then built purely from viewport snapshots, which is why the 500ms tick
+  exists and why the anchor window shrinks to a third of the read. It cannot
+  bridge a jump of more than ~two thirds of a screen between reads. For real
+  scrollback run Claude Code with `/tui default` or
+  `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`.
+- Stitching anchors the new read inside the stored lines by comparing a
+  30-line window (ANSI-stripped, right-trimmed) at several offsets into the
+  read, most recent occurrence first, so redrawn tails (spinners, prompts) and
+  edited top lines still line up. Reads use `source: recent_unwrapped` so a
+  pane resize doesn't re-wrap lines under the anchors. A full-buffer read
+  (`truncated: false`) that matches nothing and is at least as long as the
+  stored history replaces it: the pane id is living a new life after a
+  restart. A shorter unmatched one is a viewport that jumped, and is appended
+  after a gap marker.
+- Stored in ANSI; `format=text` strips it on the way out. Cap
+  `--history-lines` (default 10000) per pane, persisted to
+  `~/.local/state/herdr-web/history/<pane_id>.json` at most every 30s and on
+  exit; files untouched for 7 days are pruned at startup.
+
+In the UI the live tail works as before. A **Show earlier output** pill sits
+above it whenever the history holds lines before the tail, and scrolling up to
+the top loads the previous 1000 lines (scroll position is preserved). Loaded
+history and the tail share history coordinates (`start`/`total` on every
+`output` event), so the client drops overlapping lines and fills any gap when
+the tail moves past the loaded block. Switching **Aa** or opening another
+agent resets the loaded block.
+
 ## Output rendering
 
 The detail view reads the pane with `format=ansi` and renders colors and text
@@ -294,7 +348,9 @@ coalesced into a single span.
   uses a 350ms `agent.read` compare loop.
 - `agent.read` / `pane.read` results wrap the payload:
   `{type:"pane_read", read:{text, revision, truncated, ...}}` — the bridge
-  unwraps `read` for `GET /api/agents/:id/output`.
+  unwraps `read` for `GET /api/agents/:id/output`. `source: recent` returns
+  at most 1000 lines of host scrollback (measured on 0.8.2: `truncated: true`
+  at exactly 1000 regardless of a larger `lines`); `lines: null` means ~80.
 - `pane.agent_status_changed` subscriptions **require a `pane_id`** (they are
   per-pane, not global). The server subscribes per agent pane from
   `agent.list` plus a set of global events (`pane.created/closed/updated`,
@@ -335,9 +391,12 @@ Key names accepted by `pane.send_keys` (verified): single characters (`4`,
 
 Exercised against a throwaway Claude session:
 
-- **`agent.send` writes literal text without submitting** (confirmed, and
-  stated by `herdr agent --help`). The UI's send bar therefore follows each
-  send with `pane.send_keys ["enter"]` after a short delay.
+- **`agent.send` wrote literal text without submitting** (confirmed at the
+  time). It no longer exists in herdr 0.8; `pane.send_text` is its direct
+  replacement and the UI's send bar still follows each send with
+  `pane.send_keys ["enter"]` after a short delay. `agent.prompt` is the
+  atomic text+Enter alternative (rejects `blocked` agents) if that ever
+  becomes preferable.
 - **`pane.send_keys` names `enter`, `esc`/`escape`, `ctrl+c` are accepted and
   delivered** (invalid names return an `invalid_key` error). Note Claude Code
   itself keeps composer text on Esc; Ctrl+C clears/interrupts.

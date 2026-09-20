@@ -252,6 +252,14 @@
     color: var(--term-fg);
     white-space: pre-wrap; word-break: break-word;
   }
+  #earlierBtn {
+    display: block; margin: 0 auto 10px; padding: 6px 14px; border-radius: 999px;
+    border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.06);
+    color: var(--term-fg); font: 12px system-ui, sans-serif; cursor: pointer;
+  }
+  #earlierBtn:disabled { opacity: .5; cursor: default; }
+  #earlierBtn[hidden] { display: none; }
+  #outOlder:empty { display: none; }
   #out .placeholder { color: rgba(214,214,220,.45); font-size: 14px; padding: 24px 8px; text-align: center; }
   #out .a-b { font-weight: 700; }
   #out .a-d { opacity: .6; }
@@ -396,7 +404,10 @@
     </button>
     <button class="iconbtn" id="moreBtn" aria-label="Agent actions" aria-haspopup="menu" aria-expanded="false">⋯</button>
   </div>
-  <div id="out"><pre id="outText"></pre></div>
+  <div id="out">
+    <button type="button" id="earlierBtn" hidden>Show earlier output</button>
+    <pre id="outOlder"></pre><pre id="outText"></pre>
+  </div>
   <div id="composer">
     <div class="keys">
       <button type="button" data-key="enter">Enter</button>
@@ -466,6 +477,12 @@
   let lastOutputAt = 0;
   let paneEs = null;         // per-pane live SSE stream
   let paneLive = false;
+  // Scrollback beyond the live tail: lines [older.start, older.end) of the
+  // server-side history, rendered above the tail. tailStart is the history
+  // index of the tail's first line.
+  let older = { start: 0, end: 0, text: '' };
+  let tailStart = 0;
+  let olderLoading = false;
 
   // ---- API ----
   async function api(path, opts = {}) {
@@ -837,6 +854,7 @@
     if (!a) return showNotFound(terminalId);
     current = a;
     lastEventRev = -1;
+    resetOlder();
     updateDetailHeader();
     $('outText').textContent = '';
     $('out').querySelector('.placeholder')?.remove();
@@ -995,19 +1013,47 @@
     ansiOn = !ansiOn;
     localStorage.setItem(ANSI_KEY, ansiOn ? '1' : '0');
     renderAnsiBtn();
-    if (current) { loadOutput(); openPaneStream(); } // refetch/reopen with the new format
+    if (current) { resetOlder(); loadOutput(); openPaneStream(); } // refetch/reopen with the new format
   });
   renderAnsiBtn();
 
+  // Claude's TUI brackets its prompt with box-drawing rules; drop those lines,
+  // keeping their escapes so SGR state carries over.
+  const BOX_ONLY = /^[\s\u2500-\u257f]*$/;
+  function stripRules(text) {
+    const lines = [];
+    for (const ln of text.split('\n')) {
+      const bare = ln.replace(ANSI_RE, '');
+      if (BOX_ONLY.test(bare) && /[\u2500-\u257f]/.test(bare)) {
+        const esc = (ln.match(ANSI_RE) || []).join('');
+        if (esc && lines.length) lines[lines.length - 1] += esc;
+        continue;
+      }
+      lines.push(ln);
+    }
+    return lines.join('\n');
+  }
+
+  function renderInto(el, text) {
+    if (ansiOn) el.replaceChildren(renderAnsi(text));
+    else el.textContent = text;
+  }
+
   // Render output text, keeping the user's place unless they're at the bottom.
-  function renderOutput(text) {
-    text = (text || '').replace(/\r/g, '').replace(/(?:\s|\x1b\[[0-9;]*m)+$/, '');
+  // start/total are the tail's coordinates in the server-side history.
+  function renderOutput(text, start = 0, total = null) {
+    text = (text || '').replace(/\r/g, '');
+    if (total !== null && total < older.end) resetOlder(); // pane history restarted
+    tailStart = start;
+    if (older.end > start) text = text.split('\n').slice(older.end - start).join('\n'); // overlap
+    else if (older.end && start > older.end) fillGap(older.end, start);
+    text = stripRules(text).replace(/(?:\s|\x1b\[[0-9;]*m)+$/, '');
+    updateEarlierBtn();
     const out = $('out');
     const stick = out.scrollTop + out.clientHeight >= out.scrollHeight - 60;
-    if (ansiOn) $('outText').replaceChildren(renderAnsi(text));
-    else $('outText').textContent = text;
+    renderInto($('outText'), text);
     out.querySelector('.placeholder')?.remove();
-    if (!text) {
+    if (!text && !older.text) {
       const p = document.createElement('div');
       p.className = 'placeholder';
       p.textContent = 'No output yet.';
@@ -1025,8 +1071,8 @@
     btn.classList.add('spin');
     try {
       const fmt = readFormat();
-      const r = await api('/api/agents/' + encodeURIComponent(current.terminal_id) + '/output?lines=300&source=recent&format=' + fmt);
-      if (fmt === readFormat()) renderOutput(r.text ?? r.output ?? r.content ?? '');
+      const r = await api('/api/agents/' + encodeURIComponent(current.terminal_id) + '/output?lines=1000&source=recent&format=' + fmt);
+      if (fmt === readFormat()) renderOutput(r.text ?? '', r.start ?? 0, r.total ?? null);
     } catch (e) {
       toast('Read failed: ' + e.message);
     } finally {
@@ -1036,6 +1082,75 @@
     }
   }
   $('refreshBtn').addEventListener('click', () => loadOutput());
+
+  // ---- Earlier output (server-side history beyond herdr's 1000-line read) ----
+  function resetOlder() {
+    older = { start: 0, end: 0, text: '' };
+    tailStart = 0;
+    $('outOlder').textContent = '';
+    updateEarlierBtn();
+  }
+
+  function earlierAvailable() {
+    return current && (older.end ? older.start : tailStart) > 0;
+  }
+
+  function updateEarlierBtn() {
+    const b = $('earlierBtn');
+    b.hidden = !earlierAvailable() && !olderLoading;
+    b.disabled = olderLoading;
+    b.textContent = olderLoading ? 'Loading…' : 'Show earlier output';
+  }
+
+  function renderOlder() {
+    renderInto($('outOlder'), stripRules(older.text));
+  }
+
+  async function loadEarlier() {
+    if (olderLoading || !earlierAvailable()) return;
+    const before = older.end ? older.start : tailStart;
+    const out = $('out');
+    olderLoading = true;
+    updateEarlierBtn();
+    try {
+      const r = await api('/api/agents/' + encodeURIComponent(current.terminal_id)
+        + '/history?before=' + before + '&lines=1000&format=' + readFormat());
+      const prevH = out.scrollHeight, prevTop = out.scrollTop;
+      older.text = older.text ? r.text + '\n' + older.text : r.text;
+      older.start = r.start;
+      if (!older.end) older.end = r.end;
+      renderOlder();
+      out.scrollTop = prevTop + (out.scrollHeight - prevH); // keep the viewed lines in place
+    } catch (e) {
+      toast('History failed: ' + e.message);
+    } finally {
+      olderLoading = false;
+      updateEarlierBtn();
+    }
+  }
+  $('earlierBtn').addEventListener('click', loadEarlier);
+
+  // The live tail moved past the loaded block (a burst of output): fetch the
+  // lines in between so the two stay contiguous.
+  async function fillGap(from, to) {
+    const id = current?.terminal_id;
+    older.end = to; // claim the range first so concurrent renders don't refetch
+    try {
+      const r = await api('/api/agents/' + encodeURIComponent(id) + '/history?before=' + to + '&lines=' + (to - from) + '&format=' + readFormat());
+      if (current?.terminal_id !== id) return;
+      older.text = older.text ? older.text + '\n' + r.text : r.text;
+      renderOlder();
+    } catch { /* tail still renders; the gap shows on next reload */ }
+  }
+
+  // Scrolling up to the top loads more, like a chat history.
+  let lastScrollTop = 0;
+  $('out').addEventListener('scroll', () => {
+    const out = $('out');
+    const up = out.scrollTop < lastScrollTop;
+    lastScrollTop = out.scrollTop;
+    if (up && out.scrollTop < 120) loadEarlier();
+  });
 
   // Coalesce pane_updated bursts with a trailing debounce.
   // Only a fallback: the per-pane stream renders directly while connected.
@@ -1067,7 +1182,8 @@
     paneEs.onopen = () => setPaneLive(true);
     paneEs.addEventListener('output', (ev) => {
       setPaneLive(true);
-      renderOutput(JSON.parse(ev.data).text);
+      const d = JSON.parse(ev.data);
+      renderOutput(d.text, d.start ?? 0, d.total ?? null);
     });
     paneEs.addEventListener('stream_error', () => closePaneStream()); // fall back to hints/polling
     paneEs.onerror = () => {

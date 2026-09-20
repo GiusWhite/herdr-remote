@@ -8,6 +8,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { HistoryStore } from './history.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -18,6 +19,7 @@ const STATE_DIR = path.join(
 );
 const ACTIVITY_FILE = path.join(STATE_DIR, 'activity.json');
 const AUDIT_FILE = path.join(STATE_DIR, 'audit.log');
+const HISTORY_DIR = path.join(STATE_DIR, 'history');
 
 // ---- CLI args ----
 const args = process.argv.slice(2);
@@ -31,6 +33,7 @@ const TOKEN = argValue('--token', null);
 const TLS_CERT = argValue('--tls-cert', null);
 const TLS_KEY = argValue('--tls-key', null);
 const NOTIFY = args.includes('--notify');
+const HISTORY_LINES = Number(argValue('--history-lines', 10000));
 
 if (!['127.0.0.1', 'localhost', '::1'].includes(HOST) && !TOKEN) {
   console.error(`Refusing to bind to ${HOST} without --token. Pass --token <secret> for LAN mode.`);
@@ -230,7 +233,74 @@ function touchActivityByPane(paneId) {
   touchActivity(paneToTerminal.get(paneId));
 }
 
+// herdr >= 0.8 resolves agent targets by name or pane id only, never by
+// terminal_id, which is what the UI routes carry. Index every agent.list read.
+const paneByTerminal = new Map();
+const READ_LINES = 1000; // herdr's host scrollback cap
+
+function indexAgents(agents) {
+  for (const a of agents) if (a.terminal_id && a.pane_id) paneByTerminal.set(a.terminal_id, a.pane_id);
+}
+
+async function resolvePane(terminalId) {
+  if (terminalId.includes(':')) return terminalId; // already a pane id
+  if (!paneByTerminal.has(terminalId)) {
+    const { agents = [] } = await rpc('agent.list');
+    indexAgents(agents);
+  }
+  const paneId = paneByTerminal.get(terminalId);
+  if (!paneId) {
+    const e = new Error(`agent target ${terminalId} not found`);
+    e.code = 'agent_not_found';
+    e.status = 404;
+    throw e;
+  }
+  return paneId;
+}
+
+// ---- Scrollback history ----
+// herdr caps pane.read at 1000 lines and offers no offset, so we keep our own
+// per-pane history stitched from overlapping reads (see history.mjs). Every
+// read of a pane goes through readPane so the store sees it.
+const history = new HistoryStore({ dir: HISTORY_DIR, maxLines: HISTORY_LINES });
+const HISTORY_PRUNE_MS = 7 * 24 * 3600 * 1000;
+const historyRev = new Map(); // pane_id -> revision at last read
+const livePanes = new Set();  // panes with an open /stream (they read themselves)
+const HISTORY_FAST_MS = 500;  // working agents: alternate-screen TUIs only expose the viewport
+let historySyncing = false;
+let lastAgents = [];
+
+async function readPane(paneId) {
+  const result = await rpc('pane.read', { pane_id: paneId, source: 'recent_unwrapped', lines: READ_LINES, format: 'ansi' });
+  const read = result?.read ?? result;
+  history.ingest(paneId, read?.text ?? '', read?.truncated !== false);
+  return read;
+}
+
+// Background: read every agent pane whose revision moved since we last read
+// it, so history keeps growing for panes nobody has open. Sequential, so a
+// burst of active panes never floods the socket.
+async function syncHistory(agents) {
+  if (historySyncing) return;
+  historySyncing = true;
+  lastAgents = agents;
+  try {
+    for (const a of agents) {
+      if (!a.pane_id || livePanes.has(a.pane_id)) continue;
+      if (a.agent_status !== 'working' && historyRev.get(a.pane_id) === a.revision) continue;
+      try {
+        await readPane(a.pane_id);
+        historyRev.set(a.pane_id, a.revision);
+      } catch { /* pane may have just closed */ }
+    }
+  } finally {
+    historySyncing = false;
+  }
+}
+
 function recordActivity(agents) {
+  indexAgents(agents);
+  syncHistory(agents);
   const now = Date.now();
   for (const a of agents) {
     if (!a.terminal_id) continue;
@@ -375,15 +445,18 @@ let paneStreams = 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function handleAgentStream(req, res, terminalId, format) {
+  const paneId = await resolvePane(terminalId);
   if (paneStreams >= MAX_PANE_STREAMS) {
     return sendJSON(res, 429, { error: `too many live streams (max ${MAX_PANE_STREAMS})` });
   }
   paneStreams++;
+  livePanes.add(paneId);
   let closed = false;
   const cleanup = () => {
     if (closed) return;
     closed = true;
     paneStreams--;
+    livePanes.delete(paneId);
   };
   req.on('close', cleanup);
   res.writeHead(200, {
@@ -397,11 +470,11 @@ async function handleAgentStream(req, res, terminalId, format) {
   let lastWrite = Date.now();
   while (!closed) {
     try {
-      const result = await rpc('agent.read', { target: terminalId, source: 'recent', lines: 300, format });
-      const text = (result?.read ?? result)?.text ?? '';
-      if (text !== lastText) {
-        lastText = text;
-        res.write(`event: output\ndata: ${JSON.stringify({ text })}\n\n`);
+      await readPane(paneId);
+      const tail = history.tail(paneId, READ_LINES, format);
+      if (tail.text !== lastText) {
+        lastText = tail.text;
+        res.write(`event: output\ndata: ${JSON.stringify({ text: tail.text, start: tail.start, total: tail.total })}\n\n`);
         lastWrite = Date.now();
       } else if (Date.now() - lastWrite > 25000) {
         res.write(': ping\n\n');
@@ -540,21 +613,27 @@ async function handleApi(req, res, url) {
       return sendJSON(res, 200, await buildOverview());
     }
 
-    if (req.method === 'GET' && parts[1] === 'agents' && (parts[3] === 'stream' || parts[3] === 'output')) {
+    if (req.method === 'GET' && parts[1] === 'agents' && ['stream', 'output', 'history'].includes(parts[3])) {
       const format = url.searchParams.get('format') || 'text';
       if (!READ_FORMATS.has(format)) return sendJSON(res, 400, { error: 'format must be text or ansi' });
       if (parts[3] === 'stream') return handleAgentStream(req, res, parts[2], format);
-      const lines = Number(url.searchParams.get('lines') || 300);
-      const source = url.searchParams.get('source') || 'recent';
-      const result = await rpc('agent.read', { target: parts[2], source, lines, format });
-      return sendJSON(res, 200, result?.read ?? result); // unwrap {type:"pane_read", read:{...}}
+      const paneId = await resolvePane(parts[2]);
+      const lines = Math.max(1, Math.min(Number(url.searchParams.get('lines')) || READ_LINES, HISTORY_LINES));
+      if (parts[3] === 'history') {
+        // Older lines from our store only; no herdr read.
+        const before = Number(url.searchParams.get('before'));
+        if (!Number.isFinite(before) || before < 0) return sendJSON(res, 400, { error: 'before must be a line index' });
+        return sendJSON(res, 200, history.slice(paneId, before - lines, before, format));
+      }
+      const read = await readPane(paneId);
+      return sendJSON(res, 200, { ...history.tail(paneId, lines, format), pane_id: paneId, revision: read?.revision });
     }
 
     if (req.method === 'POST' && parts[1] === 'agents' && parts[3] === 'send') {
       const { text } = await readBody(req);
       if (typeof text !== 'string' || !text.length) return sendJSON(res, 400, { error: 'text required' });
       audit({ ip, route: 'send', target: parts[2], bytes: Buffer.byteLength(text) });
-      const result = await rpc('agent.send', { target: parts[2], text });
+      const result = await rpc('pane.send_text', { pane_id: await resolvePane(parts[2]), text });
       touchActivity(parts[2]);
       return sendJSON(res, 200, result ?? { ok: true });
     }
@@ -605,7 +684,7 @@ async function handleApi(req, res, url) {
       }
       const next = typeof name === 'string' && name.trim() ? name.trim() : null; // empty clears
       audit({ ip, route: 'agent.rename', target: parts[2], bytes: next ? Buffer.byteLength(next) : 0 });
-      const result = await rpc('agent.rename', { target: parts[2], name: next });
+      const result = await rpc('agent.rename', { target: await resolvePane(parts[2]), name: next });
       touchActivity(parts[2]);
       pollOverview();
       return sendJSON(res, 200, result ?? { ok: true });
@@ -638,7 +717,7 @@ async function handleApi(req, res, url) {
 
     sendJSON(res, 404, { error: 'not found' });
   } catch (e) {
-    sendJSON(res, 502, { error: e.message, code: e.code });
+    sendJSON(res, e.status || 502, { error: e.message, code: e.code });
   }
 }
 
@@ -661,7 +740,11 @@ connectEvents();
 refreshActivity();
 // Slow always-on tick: keeps recency current when no client is watching.
 setInterval(() => { if (!sseClients.size) refreshActivity(); }, IDLE_ACTIVITY_POLL_MS);
-for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { saveActivity(); process.exit(0); });
+// Fast tick: a working agent on the alternate screen scrolls its viewport away
+// for good, so read it often enough that consecutive reads still overlap.
+setInterval(() => { if (lastAgents.some((a) => a.agent_status === 'working')) syncHistory(lastAgents); }, HISTORY_FAST_MS);
+history.prune(HISTORY_PRUNE_MS);
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { saveActivity(); history.save(); process.exit(0); });
 server.listen(PORT, HOST, () => {
   console.log(`herdr-web on ${SCHEME}://${HOST}:${PORT} (socket: ${socketPath}${TOKEN ? ', token required' : ''})`);
 });
