@@ -17,29 +17,38 @@ export class HistoryStore {
     this.dir = dir;
     this.maxLines = maxLines;
     this.saveMs = saveMs;
-    this.panes = new Map(); // pane_id -> { raw: string[], keys: string[], dirty, loaded }
+    this.panes = new Map(); // pane_id -> { raw: string[], keys: string[], agent, dirty }
     this.saveTimer = null;
   }
 
   file(paneId) { return path.join(this.dir, encodeURIComponent(paneId) + '.json'); }
 
-  entry(paneId) {
+  // `agentId` is the terminal that owns the pane right now. herdr reuses pane
+  // ids, so history kept under a different owner belongs to another
+  // conversation and is dropped rather than shown under this one.
+  entry(paneId, agentId) {
     let e = this.panes.get(paneId);
     if (!e) {
-      e = { raw: [], keys: [], dirty: false };
+      e = { raw: [], keys: [], agent: null, dirty: false };
       try {
         const saved = JSON.parse(fs.readFileSync(this.file(paneId), 'utf8'));
-        if (Array.isArray(saved.lines)) { e.raw = saved.lines; e.keys = saved.lines.map(key); }
+        if (Array.isArray(saved.lines)) {
+          e.raw = saved.lines; e.keys = saved.lines.map(key); e.agent = saved.agent ?? null;
+        }
       } catch { /* no saved history */ }
       this.panes.set(paneId, e);
+    }
+    if (agentId && e.agent !== agentId) {
+      if (e.agent !== null || e.raw.length) { e.raw = []; e.keys = []; e.dirty = true; }
+      e.agent = agentId;
     }
     return e;
   }
 
   // Merge one read result (lines of `text`, `truncated` from herdr) into the
   // pane's history. Returns the entry.
-  ingest(paneId, text, truncated) {
-    const e = this.entry(paneId);
+  ingest(paneId, text, truncated, agentId) {
+    const e = this.entry(paneId, agentId);
     const tail = (text ?? '').replace(/\r/g, '').split('\n');
     const tailKeys = tail.map(key);
     if (!e.raw.length) return this.replace(e, tail, tailKeys);
@@ -105,7 +114,7 @@ export class HistoryStore {
       e.dirty = false;
       try {
         const f = this.file(paneId);
-        fs.writeFileSync(f + '.tmp', JSON.stringify({ lines: e.raw }));
+        fs.writeFileSync(f + '.tmp', JSON.stringify({ agent: e.agent, lines: e.raw }));
         fs.renameSync(f + '.tmp', f);
       } catch { /* best effort */ }
     }

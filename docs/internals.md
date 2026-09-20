@@ -185,10 +185,18 @@ overlapping reads:
   stored history replaces it: the pane id is living a new life after a
   restart. A shorter unmatched one is a viewport that jumped, and is appended
   after a gap marker.
+- **Each history is owned by the terminal that held the pane when it was
+  written**, and the owner is stored next to the lines. herdr reuses pane ids,
+  and the length test above cannot catch the handover — an alternate-screen
+  agent's first read is one ~67-line viewport, far shorter than the thousands
+  of stored lines, so it anchors nowhere, does not look like a restart, and
+  used to be appended under the previous agent's conversation. A read whose
+  owner differs from the stored one starts the history over.
 - Stored in ANSI; `format=text` strips it on the way out. Cap
   `--history-lines` (default 10000) per pane, persisted to
-  `~/.local/state/herdr-web/history/<pane_id>.json` at most every 30s and on
-  exit; files untouched for 7 days are pruned at startup.
+  `~/.local/state/herdr-web/history/<pane_id>.json` as
+  `{agent, lines}` at most every 30s and on exit; files untouched for 7 days
+  are pruned at startup.
 
 In the UI the live tail works as before. A **Show earlier output** pill sits
 above it whenever the history holds lines before the tail, and scrolling up to

@@ -33,7 +33,8 @@ node server.mjs [--port 4270] [--host 127.0.0.1] [--token <secret>] \
                 [--tls-cert cert.pem --tls-key key.pem] [--history-lines 10000] [--notify]
 ```
 
-Binding past localhost **without `--token` is refused**.
+Binding past localhost **without `--token` is refused**. `npm test` runs the
+suite (`node --test`, no dependencies).
 
 ## Setup outside this repo
 

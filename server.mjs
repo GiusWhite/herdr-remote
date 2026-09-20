@@ -236,10 +236,15 @@ function touchActivityByPane(paneId) {
 // herdr >= 0.8 resolves agent targets by name or pane id only, never by
 // terminal_id, which is what the UI routes carry. Index every agent.list read.
 const paneByTerminal = new Map();
+const terminalByPane = new Map();
 const READ_LINES = 1000; // herdr's host scrollback cap
 
 function indexAgents(agents) {
-  for (const a of agents) if (a.terminal_id && a.pane_id) paneByTerminal.set(a.terminal_id, a.pane_id);
+  for (const a of agents) {
+    if (!a.terminal_id || !a.pane_id) continue;
+    paneByTerminal.set(a.terminal_id, a.pane_id);
+    terminalByPane.set(a.pane_id, a.terminal_id);
+  }
 }
 
 async function resolvePane(terminalId) {
@@ -273,7 +278,9 @@ let lastAgents = [];
 async function readPane(paneId) {
   const result = await rpc('pane.read', { pane_id: paneId, source: 'recent_unwrapped', lines: READ_LINES, format: 'ansi' });
   const read = result?.read ?? result;
-  history.ingest(paneId, read?.text ?? '', read?.truncated !== false);
+  // Pane ids are reused across agents; the terminal owning it now scopes the
+  // history, so a new agent never inherits the previous one's scrollback.
+  history.ingest(paneId, read?.text ?? '', read?.truncated !== false, terminalByPane.get(paneId));
   return read;
 }
 
