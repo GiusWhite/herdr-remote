@@ -66,3 +66,42 @@ test('the owner is persisted so a restart still scopes the history', () => {
   assert.equal(after.tail(pane, 10000, 'text').text, screen('agent-A', 60));
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// A live TUI redraws a spinner and an elapsed timer in the middle of the
+// screen. Those lines are placed so that every contiguous anchor window the
+// exact matcher tries contains one.
+const redrawn = (tick) => Array.from({ length: 40 }, (_, i) =>
+  i === 12 ? `✳ Thinking… (${tick}s)` : i === 25 ? `⏺ Running tool · ${tick}s` : `output line ${i}`).join('\n');
+
+test('a screen redrawn with a ticking spinner is not appended again', () => {
+  const dir = tmp();
+  const pane = 'w1:p1';
+  const store = new HistoryStore({ dir });
+
+  // `truncated: true` — a partial read, so the "pane living a new life" escape
+  // hatch cannot fire and the anchor has to carry it.
+  store.ingest(pane, redrawn(1), true, 'terminal-A');
+  store.ingest(pane, redrawn(2), true, 'terminal-A');
+  store.ingest(pane, redrawn(3), true, 'terminal-A');
+
+  const { total, text } = store.tail(pane, 10000, 'text');
+  assert.equal(total, 40, 'the screen should replace itself, not stack up');
+  assert.ok(!text.includes('history gap'));
+  assert.ok(text.includes('(3s)'), 'the newest frame wins');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('output with no overlap still starts a new block after a gap marker', () => {
+  const dir = tmp();
+  const pane = 'w1:p1';
+  const store = new HistoryStore({ dir });
+
+  store.ingest(pane, screen('first', 40), true, 'terminal-A');
+  store.ingest(pane, screen('unrelated', 40), true, 'terminal-A');
+
+  const { text, total } = store.tail(pane, 10000, 'text');
+  assert.equal(total, 81);
+  assert.ok(text.includes('history gap'));
+  assert.ok(text.includes('first line 0') && text.includes('unrelated line 0'));
+  fs.rmSync(dir, { recursive: true, force: true });
+});

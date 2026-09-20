@@ -7,6 +7,9 @@ import path from 'node:path';
 const ANSI_RE = /\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[\s\S]?/g;
 const ANCHOR_LINES = 30;
 const ANCHOR_OFFSETS = [0, 5, 10, 20, 50, 100, 200, 400, 700];
+const ALIGN_RATIO = 0.8;     // share of a read's non-blank lines that must line up
+const ALIGN_MIN_HITS = 5;    // ...and at least this many, so tiny reads can't win
+const ALIGN_SCROLL = 400;    // how far back a read may have scrolled since the last one
 const GAP_MARKER = '\x1b[2m── history gap: output arrived faster than it was read ──\x1b[0m';
 
 export const stripAnsi = (s) => s.replace(ANSI_RE, '');
@@ -161,7 +164,30 @@ function findAnchor(hist, tail) {
       if (ok) return i;
     }
   }
-  return -1;
+  return alignByOverlap(hist, tail);
+}
+
+// No run matched exactly. A live TUI redraws a spinner, an elapsed timer and a
+// token counter scattered through the screen, which breaks every contiguous
+// window without the screen having moved at all — so score the whole read
+// against each recent position and take the best-supported alignment.
+function alignByOverlap(hist, tail) {
+  let best = -1;
+  let bestHits = 0;
+  for (let i = hist.length; i >= Math.max(0, hist.length - tail.length - ALIGN_SCROLL); i--) {
+    let hits = 0;
+    let seen = 0;
+    for (let j = 0; j < tail.length && i + j < hist.length; j++) {
+      if (!tail[j].trim()) continue;
+      seen++;
+      if (hist[i + j] === tail[j]) hits++;
+    }
+    if (seen && hits > bestHits && hits >= ALIGN_MIN_HITS && hits / seen >= ALIGN_RATIO) {
+      best = i;
+      bestHits = hits;
+    }
+  }
+  return best;
 }
 
 // An anchor of blank lines or repeated separators matches everywhere.

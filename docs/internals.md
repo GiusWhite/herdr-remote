@@ -185,6 +185,16 @@ overlapping reads:
   stored history replaces it: the pane id is living a new life after a
   restart. A shorter unmatched one is a viewport that jumped, and is appended
   after a gap marker.
+- **When no contiguous window matches, the read is aligned by overlap
+  instead**: it is scored against every position within a screen (plus 400
+  lines) of the end of history, and the best-supported position wins if at
+  least 80% of the read's non-blank lines line up there. Contiguous matching
+  alone is too brittle for a live TUI — a spinner, an elapsed timer and a
+  token counter redraw in the middle of the screen, breaking every window
+  while the screen has not moved at all. Measured on 83 real consecutive reads
+  of one pane: 81 gap-appends and 4606 stored lines before, 10 and 985 after,
+  for one dropped line of real output (the rest of the difference is
+  superseded spinner frames). Costs ~0.2ms per read.
 - **Each history is owned by the terminal that held the pane when it was
   written**, and the owner is stored next to the lines. herdr reuses pane ids,
   and the length test above cannot catch the handover — an alternate-screen
