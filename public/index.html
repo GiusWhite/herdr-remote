@@ -73,7 +73,7 @@
     padding: calc(env(safe-area-inset-top) + 16px) max(16px, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 32px) max(16px, env(safe-area-inset-left));
   }
   header.app {
-    display: flex; align-items: baseline; gap: 10px;
+    display: flex; align-items: center; gap: 10px;
     padding: 8px 2px 20px;
   }
   @font-face {
@@ -104,11 +104,11 @@
   #attention.show { display: inline-flex; }
   #notifyBtn {
     display: none; align-self: center; width: 32px; height: 32px; border-radius: 8px;
-    font-size: 17px; line-height: 1; opacity: .45;
+    opacity: .45;
   }
   #notifyBtn.available { display: inline-flex; align-items: center; justify-content: center; }
-  #notifyBtn[aria-pressed="true"] { opacity: 1; }
-  #notifyBtn.denied { opacity: .3; text-decoration: line-through; }
+  #notifyBtn[aria-pressed="true"] { opacity: 1; color: #ffe044; }
+  #notifyBtn.denied { opacity: .3; }
 
   section.ws { margin-bottom: 26px; }
   section.ws h2 {
@@ -235,6 +235,12 @@
   #detail .bar .s .live::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--done); }
   #detail.live .bar .s .live { display: inline-flex; }
   #detail.notfound #composer, #detail.notfound #refreshBtn { visibility: hidden; }
+  .sprite { display: none; }
+  .ic {
+    width: 20px; height: 20px; flex: none;
+    fill: none; stroke: currentColor; stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round;
+  }
   .iconbtn {
     flex: none; width: 44px; height: 44px; border-radius: 10px;
     display: inline-flex; align-items: center; justify-content: center;
@@ -243,7 +249,7 @@
   .iconbtn:active { background: rgba(255,255,255,.1); }
   .iconbtn svg { width: 20px; height: 20px; stroke: currentColor; }
   .iconbtn.spin svg { animation: spin .7s linear infinite; }
-  #ansiBtn { font-size: 15px; font-weight: 600; letter-spacing: -.02em; opacity: .45; }
+  #ansiBtn { opacity: .45; }
   #ansiBtn[aria-pressed="true"] {
     opacity: 1;
     background: linear-gradient(90deg, var(--ansi-1), var(--ansi-3), var(--ansi-2), var(--ansi-4), var(--ansi-5));
@@ -312,6 +318,7 @@
     background: rgba(255,255,255,.08);
     border: 1px solid rgba(255,255,255,.12);
   }
+  #composer .keys button svg { width: 16px; height: 16px; }
   #composer .keys button:active { background: rgba(255,255,255,.18); }
   #composer form { display: flex; gap: 8px; align-items: flex-end; }
   #composer textarea {
@@ -388,12 +395,30 @@
 </head>
 <body>
 
+<!-- Lucide (ISC) -->
+<svg class="sprite" aria-hidden="true">
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></symbol>
+  <symbol id="i-bell-off" viewBox="0 0 24 24"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M17 17H4a1 1 0 0 1-.74-1.673C4.59 13.956 6 12.499 6 8a6 6 0 0 1 .258-1.742"/><path d="m2 2 20 20"/><path d="M8.668 3.01A6 6 0 0 1 18 8c0 2.687.77 4.653 1.707 6.05"/></symbol>
+  <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></symbol>
+  <symbol id="i-arrow-down" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></symbol>
+  <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></symbol>
+  <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></symbol>
+  <symbol id="i-ellipsis" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></symbol>
+  <symbol id="i-keyboard" viewBox="0 0 24 24"><path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/><rect width="20" height="16" x="2" y="4" rx="2"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+  <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+  <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-refresh-cw" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></symbol>
+  <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z"/><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/></symbol>
+</svg>
+
 <main id="home">
   <header class="app">
     <h1>herdr</h1>
     <span id="conn"><span class="dot"></span><span id="connLabel">connecting</span></span>
     <span id="attention" role="status"></span>
-    <button type="button" id="notifyBtn" aria-pressed="false" aria-label="Notifications" title="Notifications off">🔔</button>
+    <button type="button" id="notifyBtn" aria-pressed="false" aria-label="Notifications" title="Notifications off"><svg class="ic"><use href="#i-bell"></use></svg></button>
   </header>
   <div id="workspaces"><p class="note">Loading…</p></div>
 </main>
@@ -401,17 +426,17 @@
 <div id="detail" role="dialog" aria-modal="true">
   <div class="bar">
     <button class="iconbtn" id="backBtn" aria-label="Back">
-      <svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      <svg class="ic"><use href="#i-chevron-left"></use></svg>
     </button>
     <div class="titlebox">
       <div class="t" id="dTitle"></div>
       <div class="s"><span class="status" id="dStatus"></span><span id="dSub"></span><span class="live">live</span></div>
     </div>
-    <button class="iconbtn" id="ansiBtn" aria-pressed="true" aria-label="Toggle ANSI colors" title="ANSI colors on">Aa</button>
+    <button class="iconbtn" id="ansiBtn" aria-pressed="true" aria-label="Toggle ANSI colors" title="ANSI colors on"><svg class="ic"><use href="#i-palette"></use></svg></button>
     <button class="iconbtn" id="refreshBtn" aria-label="Refresh output">
-      <svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg>
+      <svg class="ic"><use href="#i-refresh-cw"></use></svg>
     </button>
-    <button class="iconbtn" id="moreBtn" aria-label="Agent actions" aria-haspopup="menu" aria-expanded="false">⋯</button>
+    <button class="iconbtn" id="moreBtn" aria-label="Agent actions" aria-haspopup="menu" aria-expanded="false"><svg class="ic"><use href="#i-ellipsis"></use></svg></button>
   </div>
   <div id="out">
     <button type="button" id="earlierBtn" hidden>Show earlier output</button>
@@ -422,18 +447,18 @@
       <button type="button" data-key="enter">Enter</button>
       <button type="button" data-key="esc">Esc</button>
       <button type="button" data-key="ctrl+c">Ctrl+C</button>
-      <button type="button" data-key="up" aria-label="Up">↑</button>
-      <button type="button" data-key="down" aria-label="Down">↓</button>
-      <button type="button" data-key="left" aria-label="Left">←</button>
-      <button type="button" data-key="right" aria-label="Right">→</button>
+      <button type="button" data-key="up" aria-label="Up"><svg class="ic"><use href="#i-arrow-up"></use></svg></button>
+      <button type="button" data-key="down" aria-label="Down"><svg class="ic"><use href="#i-arrow-down"></use></svg></button>
+      <button type="button" data-key="left" aria-label="Left"><svg class="ic"><use href="#i-arrow-left"></use></svg></button>
+      <button type="button" data-key="right" aria-label="Right"><svg class="ic"><use href="#i-arrow-right"></use></svg></button>
       <button type="button" data-key="tab">Tab</button>
       <button type="button" data-key="shift+tab">Shift+Tab</button>
     </div>
     <form id="sendForm">
-      <button class="keymode" type="button" id="keyModeBtn" aria-pressed="false" aria-label="Toggle keystroke mode" title="Send input as keystrokes">⌨</button>
+      <button class="keymode" type="button" id="keyModeBtn" aria-pressed="false" aria-label="Toggle keystroke mode" title="Send input as keystrokes"><svg class="ic"><use href="#i-keyboard"></use></svg></button>
       <textarea id="sendInput" rows="1" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Send text to agent…" aria-label="Text to send"></textarea>
       <button class="send" type="submit" aria-label="Send">
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+        <svg class="ic"><use href="#i-send"></use></svg>
       </button>
     </form>
   </div>
@@ -589,7 +614,7 @@
       add.type = 'button';
       add.className = 'add';
       add.setAttribute('aria-label', 'New agent in ' + (ws.label || 'workspace ' + ws.number));
-      add.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>';
+      add.innerHTML = '<svg class="ic"><use href="#i-plus"></use></svg>';
       add.addEventListener('click', () => openSheet(ws));
       h.appendChild(add);
       sec.appendChild(h);
@@ -630,7 +655,7 @@
     meta.append(title, sub);
     open.append(dot, meta);
     open.insertAdjacentHTML('beforeend',
-      '<svg class="chev" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>');
+      '<svg class="ic chev"><use href="#i-chevron-right"></use></svg>');
     const go = () => {
       cameFromHome = true;
       location.hash = '#/agent/' + encodeURIComponent(a.terminal_id);
@@ -642,7 +667,7 @@
     const more = document.createElement('button');
     more.type = 'button';
     more.className = 'more';
-    more.textContent = '⋯';
+    more.innerHTML = '<svg class="ic"><use href="#i-ellipsis"></use></svg>';
     more.setAttribute('aria-label', 'Actions for ' + agentTitle(a));
     more.setAttribute('aria-haspopup', 'menu');
     more.setAttribute('aria-expanded', 'false');
@@ -1377,6 +1402,7 @@
     const on = notifyEnabled();
     b.classList.toggle('denied', denied);
     b.setAttribute('aria-pressed', String(on));
+    b.querySelector('use').setAttribute('href', on ? '#i-bell' : '#i-bell-off');
     b.title = denied ? 'Notifications blocked by the browser' : on ? 'Notifications on' : 'Notifications off';
   }
 
