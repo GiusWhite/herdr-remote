@@ -9,6 +9,7 @@ const SHELL = [
   '/icon-512.png',
   '/icon-512-maskable.png',
   '/apple-touch-icon.png',
+  '/nabla-latin.woff2',
 ];
 
 self.addEventListener('install', (event) => {

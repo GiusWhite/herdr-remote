@@ -76,7 +76,16 @@
     display: flex; align-items: baseline; gap: 10px;
     padding: 8px 2px 20px;
   }
-  header.app h1 { font-size: 26px; font-weight: 700; letter-spacing: -.02em; }
+  @font-face {
+    font-family: 'Nabla';
+    src: url('/nabla-latin.woff2') format('woff2');
+    font-weight: 400;
+    font-display: swap;
+  }
+  header.app h1 {
+    font-family: 'Nabla', system-ui, sans-serif;
+    font-size: 28px; font-weight: 400; line-height: 1.15; letter-spacing: 0;
+  }
   #conn {
     margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
     font-size: 13px; color: var(--text-2);
