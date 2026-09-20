@@ -12,7 +12,7 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/sh</string>
-		<string>/Users/giuswhite/Develop/herdr-web/scripts/renew-tls.sh</string>
+		<string>__REPO__/scripts/renew-tls.sh</string>
 	</array>
 	<key>RunAtLoad</key>
 	<false/>
@@ -24,10 +24,10 @@
 		<integer>40</integer>
 	</dict>
 	<key>StandardErrorPath</key>
-	<string>/Users/giuswhite/Library/Logs/herdr-web-tls.log</string>
+	<string>__HOME__/Library/Logs/herdr-web-tls.log</string>
 	<key>StandardOutPath</key>
-	<string>/Users/giuswhite/Library/Logs/herdr-web-tls.log</string>
+	<string>__HOME__/Library/Logs/herdr-web-tls.log</string>
 	<key>WorkingDirectory</key>
-	<string>/Users/giuswhite/Develop/herdr-web</string>
+	<string>__REPO__</string>
 </dict>
 </plist>

@@ -1,24 +1,27 @@
 #!/bin/sh
-# Issues/renews the herdr-web TLS cert via Let's Encrypt DNS-01 (Hostinger),
-# installs it where the server reads it, and restarts the service only on change.
+# Issues/renews the TLS cert via Let's Encrypt DNS-01 (Hostinger), installs it
+# where the server reads it, and restarts the service only on change.
 set -eu
 
-DOMAIN=herdr.giuswhite.eu
-LABEL=com.giuswhite.herdr-web
 CONF="$HOME/.config/herdr-web"
 LEGO_PATH="$CONF/lego"
 TLS="$CONF/tls"
 
 if [ ! -f "$CONF/acme.env" ]; then
-  echo "missing $CONF/acme.env (needs HOSTINGER_API_TOKEN and ACME_EMAIL)" >&2
+  echo "missing $CONF/acme.env (needs HERDR_DOMAIN, HOSTINGER_API_TOKEN, ACME_EMAIL)" >&2
   exit 1
 fi
 . "$CONF/acme.env"
 export HOSTINGER_API_TOKEN
 
+DOMAIN="${HERDR_DOMAIN:?set HERDR_DOMAIN in $CONF/acme.env}"
+LABEL="${HERDR_LABEL:-com.giuswhite.herdr-web}"
+
 mkdir -p "$LEGO_PATH" "$TLS"
 
 # lego 5 dropped the `renew` command: `run` issues or renews as needed.
+# Propagation is checked against public resolvers; a LAN router often answers
+# NXDOMAIN for the _acme-challenge name.
 lego run --accept-tos --email "$ACME_EMAIL" --dns hostinger \
      --domains "$DOMAIN" --path "$LEGO_PATH" --renew-days 30 \
      --dns.resolvers 1.1.1.1:53,8.8.8.8:53

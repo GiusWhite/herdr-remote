@@ -5,7 +5,7 @@
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PATH</key>
-		<string>/Users/giuswhite/.nvm/versions/node/v22.22.2/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+		<string>__NODE_BIN__:/opt/homebrew/bin:/usr/bin:/bin</string>
 	</dict>
 	<key>KeepAlive</key>
 	<true/>
@@ -13,27 +13,27 @@
 	<string>com.giuswhite.herdr-web</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/Users/giuswhite/.nvm/versions/node/v22.22.2/bin/node</string>
-		<string>/Users/giuswhite/Develop/herdr-web/server.mjs</string>
+		<string>__NODE_BIN__/node</string>
+		<string>__REPO__/server.mjs</string>
 		<string>--host</string>
 		<string>0.0.0.0</string>
 		<string>--token</string>
 		<string>__TOKEN__</string>
 		<string>--tls-cert</string>
-		<string>/Users/giuswhite/.config/herdr-web/tls/cert.pem</string>
+		<string>__HOME__/.config/herdr-web/tls/cert.pem</string>
 		<string>--tls-key</string>
-		<string>/Users/giuswhite/.config/herdr-web/tls/key.pem</string>
+		<string>__HOME__/.config/herdr-web/tls/key.pem</string>
 		<string>--notify</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>StandardErrorPath</key>
-	<string>/Users/giuswhite/Library/Logs/herdr-web.log</string>
+	<string>__HOME__/Library/Logs/herdr-web.log</string>
 	<key>StandardOutPath</key>
-	<string>/Users/giuswhite/Library/Logs/herdr-web.log</string>
+	<string>__HOME__/Library/Logs/herdr-web.log</string>
 	<key>ThrottleInterval</key>
 	<integer>10</integer>
 	<key>WorkingDirectory</key>
-	<string>/Users/giuswhite/Develop/herdr-web</string>
+	<string>__REPO__</string>
 </dict>
 </plist>
