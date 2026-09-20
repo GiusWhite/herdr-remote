@@ -349,6 +349,52 @@
   #composer.keymode-on textarea { border-color: var(--accent); }
   #composer .send svg { width: 18px; height: 18px; stroke: currentColor; }
 
+  /* ---- Slash command picker ---- */
+  #cmdSheet {
+    position: fixed; inset: 0; z-index: 16; display: none;
+    background: rgba(0,0,0,.45);
+  }
+  #cmdSheet.open { display: block; }
+  #cmdSheet .panel {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    max-width: 640px; margin: 0 auto; max-height: 76vh;
+    padding: 14px max(12px, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 10px) max(12px, env(safe-area-inset-left));
+    background: var(--surface); color: var(--text);
+    border-radius: 18px 18px 0 0; border-top: 1px solid var(--line);
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  #cmdFilter {
+    width: 100%; height: 42px; padding: 0 12px; border-radius: 10px; flex: none;
+    font: 14px/1 ui-monospace, "SF Mono", Menlo, monospace; color: var(--text);
+    background: var(--surface-2); border: 1px solid var(--line);
+  }
+  #cmdList { overflow-y: auto; -webkit-overflow-scrolling: touch; margin: 0 -4px; }
+  #cmdList .row { display: flex; align-items: center; gap: 8px; }
+  #cmdList .pick {
+    flex: 1; min-width: 0; text-align: left; padding: 9px 8px; border-radius: 10px;
+    display: block; color: var(--text);
+  }
+  #cmdList .pick:active, #cmdList .go:active { background: var(--surface-2); }
+  #cmdList .n { font: 13px/1.3 ui-monospace, "SF Mono", Menlo, monospace; display: block; }
+  #cmdList .d {
+    font-size: 12px; color: var(--text-2); display: block; margin-top: 2px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #cmdList .tag { font-size: 10px; color: var(--accent); text-transform: uppercase; letter-spacing: .06em; }
+  #cmdList .go {
+    flex: none; width: 38px; height: 38px; border-radius: 10px; color: var(--text-2);
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  #cmdList .go svg { width: 16px; height: 16px; }
+  #cmdList .none { font-size: 13px; color: var(--text-2); padding: 10px 8px; }
+  #composer .slash {
+    flex: none; width: 44px; height: 44px; border-radius: 11px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font: 17px/1 ui-monospace, "SF Mono", Menlo, monospace; color: var(--term-fg);
+    background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.14);
+  }
+  #composer .slash[hidden] { display: none; }
+
   /* ---- New-agent bottom sheet ---- */
   #sheet {
     position: fixed; inset: 0; z-index: 15; display: none;
@@ -455,12 +501,20 @@
       <button type="button" data-key="shift+tab">Shift+Tab</button>
     </div>
     <form id="sendForm">
+      <button class="slash" type="button" id="slashBtn" aria-label="Slash commands" title="Slash commands" hidden>/</button>
       <button class="keymode" type="button" id="keyModeBtn" aria-pressed="false" aria-label="Toggle keystroke mode" title="Send input as keystrokes"><svg class="ic"><use href="#i-keyboard"></use></svg></button>
       <textarea id="sendInput" rows="1" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Send text to agent…" aria-label="Text to send"></textarea>
       <button class="send" type="submit" aria-label="Send">
         <svg class="ic"><use href="#i-send"></use></svg>
       </button>
     </form>
+  </div>
+</div>
+
+<div id="cmdSheet" role="dialog" aria-modal="true" aria-label="Slash commands">
+  <div class="panel">
+    <input type="text" id="cmdFilter" placeholder="Filter commands…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <div id="cmdList"></div>
   </div>
 </div>
 
@@ -896,6 +950,7 @@
     $('detail').classList.add('open');
     loadOutput();
     openPaneStream();
+    loadCommands();
   }
 
   function showNotFound(terminalId) {
@@ -1268,6 +1323,114 @@
     $('composer').classList.toggle('keymode-on', keyMode);
     $('sendInput').placeholder = keyMode ? 'Keystrokes… (each char is a key)' : 'Send text to agent…';
     $('sendInput').focus();
+  });
+
+  // ---- Slash commands (the agent's own skills and commands) ----
+  const RECENT_CMDS = 'herdr_recent_cmds';
+  let commands = [];
+
+  function recentCmds() {
+    try { return JSON.parse(localStorage.getItem(RECENT_CMDS)) || []; } catch { return []; }
+  }
+
+  function rememberCmd(name) {
+    const next = [name, ...recentCmds().filter((n) => n !== name)].slice(0, 5);
+    try { localStorage.setItem(RECENT_CMDS, JSON.stringify(next)); } catch { /* private mode */ }
+  }
+
+  async function loadCommands() {
+    commands = [];
+    $('slashBtn').hidden = true;
+    if (!current) return;
+    try {
+      const r = await api('/api/agents/' + encodeURIComponent(current.terminal_id) + '/commands');
+      commands = r.commands || [];
+    } catch { /* an agent without commands just keeps the button hidden */ }
+    $('slashBtn').hidden = !commands.length;
+  }
+
+  function useCmd(c, sendNow) {
+    rememberCmd(c.name);
+    closeCmds();
+    const input = $('sendInput');
+    input.value = '/' + c.name + (c.hint ? ' ' : '');
+    autosize();
+    if (sendNow && !c.hint) $('sendForm').requestSubmit();
+    else input.focus();
+  }
+
+  function renderCommands() {
+    const q = $('cmdFilter').value.trim().toLowerCase().replace(/^\//, '');
+    const rec = recentCmds();
+    const hits = commands.filter((c) =>
+      !q || c.name.toLowerCase().includes(q) || (c.description || '').toLowerCase().includes(q));
+    // Stable sort: recently used first, everything else keeps the server order.
+    const rank = (n) => (rec.indexOf(n) === -1 ? rec.length : rec.indexOf(n));
+    hits.sort((a, b) => rank(a.name) - rank(b.name));
+
+    const list = $('cmdList');
+    list.textContent = '';
+    if (!hits.length) {
+      const p = document.createElement('p');
+      p.className = 'none';
+      p.textContent = 'No command matches.';
+      list.appendChild(p);
+      return;
+    }
+    for (const c of hits) {
+      const row = document.createElement('div');
+      row.className = 'row';
+
+      const pick = document.createElement('button');
+      pick.type = 'button';
+      pick.className = 'pick';
+      const n = document.createElement('span');
+      n.className = 'n';
+      n.textContent = '/' + c.name + (c.hint ? ' ' : '');
+      if (c.scope === 'project') {
+        const tag = document.createElement('span');
+        tag.className = 'tag';
+        tag.textContent = 'project';
+        n.append(tag);
+      }
+      pick.append(n);
+      if (c.description) {
+        const d = document.createElement('span');
+        d.className = 'd';
+        d.textContent = c.description;
+        pick.append(d);
+      }
+      pick.addEventListener('click', () => useCmd(c, false));
+      row.append(pick);
+
+      // Commands that take arguments have nothing to send yet.
+      if (!c.hint) {
+        const go = document.createElement('button');
+        go.type = 'button';
+        go.className = 'go';
+        go.setAttribute('aria-label', 'Send /' + c.name + ' now');
+        go.innerHTML = '<svg class="ic"><use href="#i-send"></use></svg>';
+        go.addEventListener('click', () => useCmd(c, true));
+        row.append(go);
+      }
+      list.append(row);
+    }
+  }
+
+  function openCmds() {
+    $('cmdFilter').value = '';
+    renderCommands();
+    $('cmdSheet').classList.add('open');
+    $('cmdFilter').focus();
+  }
+
+  function closeCmds() { $('cmdSheet').classList.remove('open'); }
+
+  $('slashBtn').addEventListener('click', openCmds);
+  $('cmdFilter').addEventListener('input', renderCommands);
+  $('cmdSheet').addEventListener('click', (ev) => { if (ev.target === $('cmdSheet')) closeCmds(); });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && $('cmdSheet').classList.contains('open')) closeCmds();
   });
 
   $('sendForm').addEventListener('submit', async (ev) => {

@@ -21,6 +21,7 @@ for 1000 lines, the most `pane.read` will return (`truncated: true` above it).
 
 `format` is `text` (default) or `ansi` on both read routes; anything else is a
 400. With `ansi` the returned `text` carries the raw escape sequences.
+| `GET /api/agents/:terminalId/commands` | no herdr call: the slash commands and skills that agent can be sent, `{kind, commands:[{name, description, hint, scope}]}` |
 | `POST /api/agents/:terminalId/send` body `{text}` | `pane.send_text` |
 | `POST /api/panes/:paneId/keys` body `{keys: ["enter"]}` | `pane.send_keys` |
 | `GET /api/events` | SSE bridge over one long-lived `events.subscribe` connection, plus authoritative `overview` snapshots |
@@ -58,6 +59,23 @@ UI affordances:
   (Enter/blur saves, Esc cancels, empty clears); *Close* asks inline
   ("Close this agent? Yes / No" — no `window.confirm`) before calling the
   route. Closing from the detail view returns home.
+
+## Slash commands
+
+Typing `/grill-with-claude` on a phone keyboard is the friction this removes.
+The server reads the same places Claude Code does — `skills/<name>/SKILL.md`
+and `commands/**/*.md` under each `--skills-dir` (default `$CLAUDE_CONFIG_DIR`,
+else `~/.claude`), plus `.claude/` inside the directory the agent runs in — and
+takes `name`, `description` and `argument-hint` from each file's frontmatter.
+A project entry shadows a user one of the same name and sorts first; results
+are cached 30s per directory. Only agents herdr reports as `claude` get a list,
+since nothing else reads those directories.
+
+In the composer a `/` button (hidden when the list is empty) opens a filterable
+sheet. Tapping a row puts `/name` in the input; the send button on the row runs
+it straight away, and is left off rows whose `argument-hint` says the command
+expects arguments. The five most recently used sort to the top, per browser
+(`herdr_recent_cmds`).
 
 ## UI routes
 

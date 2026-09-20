@@ -30,7 +30,8 @@ Needs Node 22+ and a running herdr >= 0.8 (its socket is discovered via
 ```sh
 npm start   # http://127.0.0.1:4270, localhost only
 node server.mjs [--port 4270] [--host 127.0.0.1] [--token <secret>] \
-                [--tls-cert cert.pem --tls-key key.pem] [--history-lines 10000] [--notify]
+                [--tls-cert cert.pem --tls-key key.pem] [--history-lines 10000] \
+                [--skills-dir ~/.claude] [--notify]
 ```
 
 Binding past localhost **without `--token` is refused**. `npm test` runs the

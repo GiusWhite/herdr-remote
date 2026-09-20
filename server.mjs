@@ -9,6 +9,7 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { HistoryStore } from './history.mjs';
+import { listCommands } from './commands.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -34,6 +35,9 @@ const TLS_CERT = argValue('--tls-cert', null);
 const TLS_KEY = argValue('--tls-key', null);
 const NOTIFY = args.includes('--notify');
 const HISTORY_LINES = Number(argValue('--history-lines', 10000));
+// Where an agent's slash commands and skills live; repeatable.
+const SKILL_DIRS = args.reduce((acc, a, i) => (a === '--skills-dir' && args[i + 1] ? [...acc, args[i + 1]] : acc), []);
+if (!SKILL_DIRS.length) SKILL_DIRS.push(process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME, '.claude'));
 
 if (!['127.0.0.1', 'localhost', '::1'].includes(HOST) && !TOKEN) {
   console.error(`Refusing to bind to ${HOST} without --token. Pass --token <secret> for LAN mode.`);
@@ -619,6 +623,19 @@ async function handleApi(req, res, url) {
 
     if (req.method === 'GET' && url.pathname === '/api/overview') {
       return sendJSON(res, 200, await buildOverview());
+    }
+
+    if (req.method === 'GET' && parts[1] === 'agents' && parts[3] === 'commands') {
+      let agent = lastAgents.find((a) => a.terminal_id === parts[2] || a.pane_id === parts[2]);
+      if (!agent) {
+        const { agents = [] } = await rpc('agent.list');
+        indexAgents(agents);
+        lastAgents = agents;
+        agent = agents.find((a) => a.terminal_id === parts[2] || a.pane_id === parts[2]);
+      }
+      // Only Claude Code reads these directories; other agents get nothing.
+      const commands = agent?.agent === 'claude' ? listCommands({ roots: SKILL_DIRS, cwd: agent.cwd }) : [];
+      return sendJSON(res, 200, { kind: agent?.agent ?? null, commands });
     }
 
     if (req.method === 'GET' && parts[1] === 'agents' && ['stream', 'output', 'history'].includes(parts[3])) {
